@@ -36,23 +36,37 @@ async def tenant_summary(tenant_id: str):
         elif typ == "loan_repayment": repayments += amount
         elif typ == "loan_disbursement": disbursed += abs(amount)
     exp = sum(float(x.get("amount", 0)) for x in expenses)
-    real_tx = [x for x in tx if x.get("type") != "expense_allocation"]
+    loan_interest_income = sum(float(x.get("interest", 0) or 0) for x in tx if x.get("type") == "loan_repayment")
+    excluded = {"contribution", "loan_repayment", "loan_disbursement", "expense_allocation", "expense", "interest", "penalty"}
+    other_income = sum(max(float(x.get("amount", 0) or 0), 0.0) for x in tx if x.get("type") not in excluded)
+    profit_income = interest + penalties + loan_interest_income + other_income
+    group_profit = round(profit_income - exp, 2)
+    # Group expenses are stored in db.expenses and also have per-share
+    # expense_allocation transactions for member passbooks. Legacy builds may
+    # also contain a transaction linked to expense_id. Never count those group
+    # allocations/source rows as a second group outflow.
+    real_tx = [x for x in tx if x.get("type") not in {"expense_allocation", "expense"} and not x.get("expense_id")]
     tx_inflow = sum(max(float(x.get("amount", 0)), 0.0) for x in real_tx)
     tx_outflow = sum(max(-float(x.get("amount", 0)), 0.0) for x in real_tx)
     cash_inflow = round(tx_inflow, 2)
     cash_outflow = round(tx_outflow + exp, 2)
+    cash_inflow_total = round(sum(max(float(x.get("amount", 0)), 0.0) for x in real_tx if x.get("account", "cash") == "cash"), 2)
+    bank_inflow_total = round(sum(max(float(x.get("amount", 0)), 0.0) for x in real_tx if x.get("account", "cash") == "bank"), 2)
+    cash_outflow_total = round(sum(max(-float(x.get("amount", 0)), 0.0) for x in real_tx if x.get("account", "cash") == "cash") + sum(float(x.get("amount", 0) or 0) for x in expenses if x.get("account", "cash") == "cash"), 2)
+    bank_outflow_total = round(sum(max(-float(x.get("amount", 0)), 0.0) for x in real_tx if x.get("account", "cash") == "bank") + sum(float(x.get("amount", 0) or 0) for x in expenses if x.get("account", "cash") == "bank"), 2)
     for x in expenses:
         if x.get("account") == "bank": bank -= float(x.get("amount",0))
         else: cash -= float(x.get("amount",0))
     return {"vault_balance": round(cash+bank,2), "cash_balance": round(cash,2), "bank_balance": round(bank,2),
             "total_contributions": round(contributions,2), "interest_collected": round(interest,2),
             "penalties": round(penalties,2), "loan_disbursed": round(disbursed,2), "loan_repayments": round(repayments,2),
-            "expenses": round(exp,2), "cash_inflow": cash_inflow, "cash_outflow": cash_outflow, "members": await db.members.count_documents({"tenant_id":tenant_id,"active":True}),
+            "expenses": round(exp,2), "profit": group_profit, "cash_inflow": cash_inflow, "bank_inflow": bank_inflow_total, "cash_inflow_account": cash_inflow_total, "cash_outflow": cash_outflow, "cash_outflow_account": cash_outflow_total, "bank_outflow": bank_outflow_total, "members": await db.members.count_documents({"tenant_id":tenant_id,"active":True}),
             "total_members": await db.members.count_documents({"tenant_id":tenant_id}),
             "total_shares": await db.shares.count_documents({"tenant_id":tenant_id}),
             "active_shares": await db.shares.count_documents({"tenant_id":tenant_id,"status":"active"}),
             "inactive_shares": await db.shares.count_documents({"tenant_id":tenant_id,"status":{"$ne":"active"}}),
-            "active_loans": await db.loans.count_documents({"tenant_id":tenant_id,"status":"active"})}
+            "active_loans": await db.loans.count_documents({"tenant_id":tenant_id,"status":"active"}),
+            "transactions_count": len(real_tx)}
 
 async def analytics(tenant_id: str, months: int = 12, share_no: int | None = None, member_id: str | None = None):
     db=get_db(); now=datetime.now(timezone.utc); rows=[]

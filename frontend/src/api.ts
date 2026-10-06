@@ -106,7 +106,7 @@ export const api={
  monthlyKistReceiptUrl:(tid:string,id:string,period:string)=>`${BASE}/reports/monthly-kist/${tid}/${id}/${encodeURIComponent(period)}`,
  notifications:(tid:string)=>request<any[]>(`/group/${tid}/notifications`),
  markNotificationRead:(tid:string,id:string)=>request<any>(`/group/${tid}/notifications/${id}/read`,{method:'PATCH'}),
-  deleteNotificationsBatch:(tid:string,ids:string[])=>request<any>(`/group/${tid}/notifications/batch`,{method:'DELETE',body:JSON.stringify({ids})}),
+  clearNotifications:(tid:string,ids:string[])=>request<any>(`/group/${tid}/notifications/clear`,{method:'POST',body:JSON.stringify({ids})}),
  deleteNotification:(tid:string,id:string)=>request<any>(`/group/${tid}/notifications/${id}`,{method:'DELETE'}),
  fetchBlob:async(url:string)=>{const token=localStorage.getItem('bb-token');const r=await fetch(url,{headers:{Authorization:`Bearer ${token}`}});if(!r.ok)throw new Error('Unable to generate PDF');return r.blob()},
 };

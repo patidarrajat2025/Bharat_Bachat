@@ -1,4 +1,5 @@
 import { ReactNode, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Link, useLocation } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
@@ -59,7 +60,7 @@ export function ThemeSettings({onDone}:{onDone?:()=>void}={}){
 
 export function Pagination({page,total,pageSize=5,onChange}:{page:number;total:number;pageSize?:number;onChange:(p:number)=>void}){const pages=Math.max(1,Math.ceil(total/pageSize));if(total<=pageSize)return null;return <div className="pagination"><button disabled={page<=1} onClick={()=>onChange(page-1)}>{tr('Previous')}</button>{Array.from({length:pages},(_,i)=>i+1).slice(Math.max(0,page-3),Math.min(pages,page+2)).map(p=><button key={p} className={p===page?'active':''} onClick={()=>onChange(p)}>{p}</button>)}<button disabled={page>=pages} onClick={()=>onChange(page+1)}>{tr('Next')}</button></div>}
 
-export function ActivityAccordion({items}:{items:{title:string;meta:string;value:string;tone?:'positive'|'negative';sortKey?:string}[]}){
+export function ActivityAccordion({items}:{items:{title:string;meta:string;value:string;tone?:'positive'|'negative'|'neutral';sortKey?:string}[]}){
   const [open,setOpen]=useState(false); const [page,setPage]=useState(1); const pageSize=10;
   const sorted=useMemo(()=>items.slice().sort((a,b)=>String(b.sortKey||'').localeCompare(String(a.sortKey||''))),[items]);
   const pages=Math.max(1,Math.ceil(sorted.length/pageSize));
@@ -93,7 +94,7 @@ export function Layout({children}:{children:ReactNode}){
   const [unread,setUnread]=useState(0);
   const [notifications,setNotifications]=useState<any[]>([]); const [notifOpen,setNotifOpen]=useState(false);
   const refreshNotifications=async(openTray=false)=>{if(!user?.tenant_id)return;try{const rows=await api.notifications(user.tenant_id);const unreadRows=rows.filter((n:any)=>!n.read);setUnread(unreadRows.length);setNotifications(rows);if(openTray&&unreadRows.length){await Promise.all(unreadRows.map((n:any)=>api.markNotificationRead(user.tenant_id!,n._id).catch(()=>null)));setNotifications(rows.map((n:any)=>({...n,read:true})));setUnread(0)}}catch{}};
-  const closeNotifications=()=>{setNotifOpen(false)};
+  const closeNotifications=async()=>{setNotifOpen(false);if(!user?.tenant_id||!notifications.length)return;const ids=notifications.map((n:any)=>n._id).filter(Boolean);try{await api.clearNotifications(user.tenant_id,ids);setNotifications([]);setUnread(0)}catch{}};
   const allowed=user?.role==='member'
     ? ['/dashboard','/analytics','/passbook','/loans','/personal-loan']
     : user?.role==='super_admin'
@@ -217,12 +218,13 @@ export function TextArea({label,...props}:any){
 }
 
 export function Modal({title,onClose,children}:{title:string;onClose:()=>void;children:ReactNode}){
-  return <div className="modal-backdrop" role="dialog" aria-modal="true" onMouseDown={e=>{if(e.target===e.currentTarget)onClose()}}>
-    <div className="modal-card">
+  const content=<div className="modal-backdrop" role="dialog" aria-modal="true" onMouseDown={e=>{if(e.target===e.currentTarget)onClose()}}>
+    <div className={`modal-card ${/Loan|loan|Request|request/.test(title)?'loan-modal':''}`}>
       <div className="modal-head"><h2>{title}</h2><button type="button" className="icon-btn" aria-label={tr("Close")} onClick={onClose}><X size={19}/></button></div>
       <div className="modal-body">{children}</div>
     </div>
   </div>;
+  return typeof document==='undefined'?content:createPortal(content,document.body);
 }
 
 export function ErrorBox({error,onClose}:{error:string;onClose?:()=>void}){

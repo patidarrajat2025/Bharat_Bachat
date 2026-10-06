@@ -59,7 +59,14 @@ async def summary(tenant_id:str,user=Depends(current_user)):
 @router.get("/{tenant_id}/analytics")
 async def get_analytics(tenant_id:str,months:int=12,share_no:int|None=None,member_id:str|None=None,user=Depends(current_user)):
     await tenant_guard(user,tenant_id)
-    if user["role"]=="member": member_id=str(user.get("member_id") or "")
+    if user["role"]=="member":
+        member_id=str(user.get("member_id") or "")
+    elif user["role"]=="group_admin":
+        # A group admin is also represented by a member/share record. Resolve it
+        # server-side so My Share profit works even with an older login session
+        # whose JWT/user payload did not yet contain member_id.
+        from ..share_service import ensure_group_admin_member
+        member_id=str(await ensure_group_admin_member(user) or "")
     return await analytics(tenant_id,max(3,min(months,24)),share_no,member_id)
 
 
@@ -93,6 +100,30 @@ async def notifications(tenant_id:str,user=Depends(current_user)):
     except Exception:
         # Notification delivery is non-critical. A malformed legacy record must never break the dashboard.
         return []
+
+@router.post("/{tenant_id}/notifications/clear")
+async def clear_notifications(tenant_id:str,body:dict,user=Depends(current_user)):
+    """Clear the currently displayed notifications in one POST request.
+
+    We intentionally soft-delete by setting dismissed=True rather than physically
+    deleting source-backed rows. The notification GET endpoint uses the same source_key
+    with upsert, so keeping the row prevents an already-cleared notification from being
+    recreated on the next refresh.
+    """
+    await tenant_guard(user,tenant_id)
+    db=get_db(); ids=[str(x) for x in (body.get("ids") or []) if str(x)]
+    valid=[]
+    from bson import ObjectId
+    for x in ids:
+        try: valid.append(ObjectId(x))
+        except Exception: pass
+    if valid:
+        q={"_id":{"$in":valid},"tenant_id":tenant_id}
+        if user["role"]=="member":
+            q["recipient_member_id"]=str(user.get("member_id") or "")
+        result=await db.notifications.update_many(q,{"$set":{"dismissed":True,"dismissed_at":datetime.now(timezone.utc)}})
+        return {"ok":True,"count":result.modified_count}
+    return {"ok":True,"count":0}
 
 @router.delete("/{tenant_id}/notifications/batch")
 async def delete_notifications_batch(tenant_id:str,body:dict,user=Depends(current_user)):
@@ -249,6 +280,10 @@ async def monthly_kist_summary(tenant_id:str,period:str,user=Depends(current_use
     members=await db.members.find({"tenant_id":tenant_id,"active":True}).to_list(5000)
     if user["role"]=="member": members=[m for m in members if str(m["_id"])==str(user.get("member_id"))]
     tx_rows=await db.transactions.find({"tenant_id":tenant_id,"type":"contribution","$or":[{"payment_category":"monthly_kist"},{"payment_category":{"$exists":False}}],"date":{"$gte":start,"$lt":end}}).to_list(20000)
+    # Monthly collection status is group-level even when a member is logged in.
+    # Never use per-share/member expense allocations here; those are personal passbook rows.
+    expense_rows=await db.expenses.find({"tenant_id":tenant_id,"date":{"$gte":start,"$lt":end}}).to_list(20000)
+    group_expenses=round(sum(float(x.get("amount",0) or 0) for x in expense_rows),2)
     paid_by_share={}; paid_by_legacy={}
     for x in tx_rows:
         amount=float(x.get("amount",0)); sid=x.get("share_id")
@@ -263,7 +298,7 @@ async def monthly_kist_summary(tenant_id:str,period:str,user=Depends(current_use
             if remaining<=0.009: paid_shares+=1
             elif p>0: partial_shares+=1
             else: pending_shares+=1
-    return {"period":period,"expected_total":round(expected,2),"paid_total":round(paid,2),"pending_total":round(max(0,expected-paid),2),"paid_shares":paid_shares,"partial_shares":partial_shares,"pending_shares":pending_shares,"active_members":len(members)}
+    return {"period":period,"expected_total":round(expected,2),"paid_total":round(paid,2),"pending_total":round(max(0,expected-paid),2),"paid_shares":paid_shares,"partial_shares":partial_shares,"pending_shares":pending_shares,"active_members":len(members),"group_expenses":group_expenses}
 
 @router.get("/{tenant_id}/monthly-kist/{member_id}")
 async def monthly_kist_status(tenant_id:str,member_id:str,period:str,user=Depends(admin_user)):
@@ -379,12 +414,18 @@ async def group_activity(tenant_id:str,user=Depends(current_user)):
         rows.append({"kind":"transaction","type":str(x.get("type","Transaction")).replace("_"," ").title(),"amount":float(x.get("amount",0) or 0),"account":x.get("account","cash"),"date":str(x.get("date",x.get("created_at",""))),"created_at":str(x.get("created_at",x.get("date",""))),"note":x.get("note",""),"member_name":member_name,"member_id":mid,"principal":float(x.get("principal",0) or 0),"interest":float(x.get("interest",0) or 0)})
     for x in ex:
         rows.append({"kind":"expense","type":"Expense","amount":-float(x.get("amount",0) or 0),"account":x.get("account","cash"),"date":str(x.get("date",x.get("created_at",""))),"created_at":str(x.get("created_at",x.get("date",""))),"note":x.get("category","")})
-    return sorted(rows,key=lambda x:x["date"],reverse=True)[:50]
+    return sorted(rows,key=lambda x:(x.get("created_at") or x.get("date") or ""),reverse=True)[:50]
 
 @router.get("/{tenant_id}/transactions")
 async def transactions(tenant_id:str,from_date:date|None=None,to_date:date|None=None,typ:str|None=None,user=Depends(current_user)):
     await tenant_guard(user,tenant_id); q={"tenant_id":tenant_id}
-    if user["role"]=="member": q["member_id"]=str(user.get("member_id"))
+    if user["role"]=="member":
+        q["member_id"]=str(user.get("member_id"))
+    else:
+        # Group financial register must not include per-share expense allocations
+        # (those are member passbook entries) or legacy source expense rows.
+        q["type"]={"$nin":["expense_allocation","expense"]}
+        q["expense_id"]={"$exists":False}
     if typ:q["type"]=typ
     if from_date or to_date:
         q["date"]={};

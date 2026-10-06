@@ -182,3 +182,6 @@ Object.assign(en,{"View Detailed Breakdown":"View Detailed Breakdown","Transacti
 Object.assign(hi,{"View Detailed Breakdown":"विस्तृत विवरण देखें","Transactions Count":"लेन-देन की संख्या","Group Members":"समूह सदस्य","Group Shares":"समूह शेयर","Total":"कुल"});
 Object.assign(en,{"+ Add new expense name":"+ Add new expense name","Choose existing":"Choose existing","My Profit":"My Profit","Profit includes group interest, penalties and other non-contribution income, less your share of expenses.":"Profit includes group interest, penalties and other non-contribution income, less your share of expenses."});
 Object.assign(hi,{"+ Add new expense name":"+ नया खर्च नाम जोड़ें","Choose existing":"मौजूदा चुनें","My Profit":"मेरा लाभ","Profit includes group interest, penalties and other non-contribution income, less your share of expenses.":"लाभ में समूह का ब्याज, पेनल्टी और अन्य योगदान के अलावा आय शामिल है, जिसमें आपके हिस्से का खर्च घटाया जाता है।"});
+
+Object.assign(en,{"My Interest":"My Interest","Group Expenses":"Group Expenses","My Interest / Profit":"My Interest"});
+Object.assign(hi,{"My Interest":"मेरा ब्याज","Group Expenses":"समूह का खर्च","My Interest / Profit":"मेरा ब्याज"});
