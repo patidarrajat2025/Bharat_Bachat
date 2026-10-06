@@ -26,13 +26,15 @@ services:
         sync: false
       - key: MAX_UPLOAD_MB
         value: "5"
+      - key: PYTHON_VERSION
+        value: 3.13.5
 
-  - type: web
+  - type: static_site
     name: bharat-bachat-web
     runtime: static
     rootDir: frontend
-    buildCommand: npm ci && npm run build
-    staticPublishPath: dist
+    buildCommand: npm install && npm run build
+    staticPublishPath: ./dist
     routes:
       - type: rewrite
         source: /*
