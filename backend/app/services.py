@@ -43,7 +43,7 @@ async def tenant_summary(tenant_id: str, member_id: str | None = None):
                 "amount": {"$convert": {"input": {"$ifNull": ["$amount", 0]}, "to": "double", "onError": 0, "onNull": 0}},
                 "interest_value": {"$convert": {"input": {"$ifNull": ["$interest", 0]}, "to": "double", "onError": 0, "onNull": 0}},
                 "is_real": {"$and": [
-                    {"$nin": ["$type", ["expense_allocation", "expense"]]},
+                    {"$not": [{"$in": ["$type", ["expense_allocation", "expense"]]}]},
                     {"$eq": [{"$type": "$expense_id"}, "missing"]},
                 ]},
             }},
@@ -62,7 +62,7 @@ async def tenant_summary(tenant_id: str, member_id: str | None = None):
                 "cash_outflow_tx": {"$sum": {"$cond": [{"$and": ["$is_real", {"$eq": [{"$ifNull": ["$account", "cash"]}, "cash"]}, {"$lt": ["$amount", 0]}]}, {"$abs": "$amount"}, 0]}},
                 "bank_outflow_tx": {"$sum": {"$cond": [{"$and": ["$is_real", {"$eq": [{"$ifNull": ["$account", "cash"]}, "bank"]}, {"$lt": ["$amount", 0]}]}, {"$abs": "$amount"}, 0]}},
                 "other_income": {"$sum": {"$cond": [
-                    {"$and": ["$is_real", {"$nin": ["$type", ["contribution", "loan_repayment", "loan_disbursement", "interest", "penalty"]]}, {"$gt": ["$amount", 0]}]},
+                    {"$and": ["$is_real", {"$not": [{"$in": ["$type", ["contribution", "loan_repayment", "loan_disbursement", "interest", "penalty"]]}]}, {"$gt": ["$amount", 0]}]},
                     "$amount", 0,
                 ]}},
                 "real_tx_count": {"$sum": {"$cond": ["$is_real", 1, 0]}},
@@ -177,7 +177,7 @@ async def analytics(tenant_id: str, months: int = 12, share_no: int | None = Non
             "loan_interest": {"$sum": {"$cond": [{"$eq": ["$type", "loan_repayment"]}, "$interest_value", 0]}},
             "repayments": {"$sum": {"$cond": [{"$eq": ["$type", "loan_repayment"]}, "$amount", 0]}},
             "other_income": {"$sum": {"$cond": [{"$and": [
-                {"$nin": ["$type", ["contribution", "loan_repayment", "loan_disbursement", "expense_allocation", "expense", "interest", "penalty"]]},
+                {"$not": [{"$in": ["$type", ["contribution", "loan_repayment", "loan_disbursement", "expense_allocation", "expense", "interest", "penalty"]]}]},
                 {"$gt": ["$amount", 0]},
             ]}, "$amount", 0]}},
         }},

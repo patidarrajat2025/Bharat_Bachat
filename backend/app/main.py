@@ -33,13 +33,46 @@ app = FastAPI(title="Bharat Bachat API", version="1.0.0", lifespan=lifespan)
 
 @app.middleware("http")
 async def request_timing(request: Request, call_next):
-    started = __import__("time").perf_counter()
-    response = await call_next(request)
-    elapsed_ms = (__import__("time").perf_counter() - started) * 1000
-    response.headers["X-Process-Time-Ms"] = f"{elapsed_ms:.0f}"
-    if elapsed_ms >= 1000:
-        print(f"[slow-api] {request.method} {request.url.path} {elapsed_ms:.0f}ms", flush=True)
-    return response
+    # Request lifecycle timing is intentionally logged for every API call so
+    # Render logs can show exactly where time is spent from request start to end.
+    # Query strings are excluded to avoid leaking user-supplied values.
+    import time
+    import secrets
+
+    started = time.perf_counter()
+    request_id = secrets.token_hex(4)
+    path = request.url.path
+    is_api = path.startswith("/api/")
+    if is_api:
+        print(f"[api:start] id={request_id} {request.method} {path}", flush=True)
+
+    response = None
+    error = None
+    try:
+        response = await call_next(request)
+        return response
+    except Exception as exc:
+        error = exc
+        raise
+    finally:
+        elapsed_ms = (time.perf_counter() - started) * 1000
+        if response is not None:
+            response.headers["X-Process-Time-Ms"] = f"{elapsed_ms:.0f}"
+            response.headers["X-Request-Id"] = request_id
+        if is_api:
+            status = response.status_code if response is not None else 500
+            suffix = f" error={type(error).__name__}" if error else ""
+            print(
+                f"[api:end] id={request_id} {request.method} {path} "
+                f"status={status} total_ms={elapsed_ms:.0f}{suffix}",
+                flush=True,
+            )
+            if elapsed_ms >= 1000:
+                print(
+                    f"[slow-api] id={request_id} {request.method} {path} "
+                    f"{elapsed_ms:.0f}ms",
+                    flush=True,
+                )
 origins = [x.strip().rstrip("/") for x in settings.cors_origins.split(",") if x.strip()]
 # Keep production origins explicit. Do not use `*` because JWT-bearing requests use credentials.
 

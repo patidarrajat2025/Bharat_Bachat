@@ -15,6 +15,13 @@ const inFlight = new Map<string, Promise<unknown>>();
 type CacheEntry={expiresAt:number;value:unknown};
 const getCache = new Map<string,CacheEntry>();
 const GET_TTL_MS = 15000;
+const API_TIMING_LOG = String(import.meta.env.VITE_API_TIMING_LOG ?? 'true').toLowerCase() !== 'false';
+
+function logApiTiming(message:string, data?:unknown){
+  if(!API_TIMING_LOG || typeof console === 'undefined') return;
+  if(data === undefined) console.info(message);
+  else console.info(message, data);
+}
 
 export function invalidateApiCache(){ getCache.clear(); }
 
@@ -35,8 +42,13 @@ async function request<T>(path:string,options:RequestInit={}):Promise<T>{
   }
 
   const run=(async()=>{
+    const started=typeof performance !== 'undefined' ? performance.now() : Date.now();
+    const requestId=`web-${Math.random().toString(36).slice(2,8)}`;
+    logApiTiming(`[api:start] ${requestId} ${method} ${path}`);
     try{
       const res=await fetch(url,{...options,headers});
+      const serverMs=res.headers.get('X-Process-Time-Ms');
+      const backendRequestId=res.headers.get('X-Request-Id');
       if(!res.ok){
         const b=await res.json().catch(()=>({}));
         if(res.status===401){ localStorage.removeItem('bb-token'); localStorage.removeItem('bb-user'); invalidateApiCache(); }
@@ -45,8 +57,21 @@ async function request<T>(path:string,options:RequestInit={}):Promise<T>{
       const value=await res.json() as T;
       if(key) getCache.set(key,{expiresAt:Date.now()+GET_TTL_MS,value});
       else invalidateApiCache();
+      const elapsed=(typeof performance !== 'undefined' ? performance.now() : Date.now())-started;
+      logApiTiming(`[api:end] ${requestId} ${method} ${path}`,{
+        status:res.status,
+        totalMs:Math.round(elapsed),
+        serverMs:serverMs ? Number(serverMs) : undefined,
+        serverRequestId:backendRequestId || undefined,
+      });
       return value;
     }catch(error:any){
+      const elapsed=(typeof performance !== 'undefined' ? performance.now() : Date.now())-started;
+      logApiTiming(`[api:end] ${requestId} ${method} ${path}`,{
+        status:'error',
+        totalMs:Math.round(elapsed),
+        message:error?.message||String(error),
+      });
       if(error instanceof TypeError) throw new Error('Network request failed');
       throw error;
     }
@@ -124,5 +149,27 @@ export const api={
  markNotificationRead:(tid:string,id:string)=>request<any>(`/group/${tid}/notifications/${id}/read`,{method:'PATCH'}),
   clearNotifications:(tid:string,ids:string[])=>request<any>(`/group/${tid}/notifications/clear`,{method:'POST',body:JSON.stringify({ids})}),
  deleteNotification:(tid:string,id:string)=>request<any>(`/group/${tid}/notifications/${id}`,{method:'DELETE'}),
- fetchBlob:async(url:string)=>{const token=localStorage.getItem('bb-token');const r=await fetch(url,{headers:{Authorization:`Bearer ${token}`}});if(!r.ok)throw new Error('Unable to generate PDF');return r.blob()},
+ fetchBlob:async(url:string)=>{
+    const started=typeof performance !== 'undefined' ? performance.now() : Date.now();
+    const requestId=`web-${Math.random().toString(36).slice(2,8)}`;
+    logApiTiming(`[api:start] ${requestId} GET ${url}`);
+    try{
+      const token=localStorage.getItem('bb-token');
+      const r=await fetch(url,{headers:{Authorization:`Bearer ${token}`}});
+      if(!r.ok) throw new Error('Unable to generate PDF');
+      const blob=await r.blob();
+      const elapsed=(typeof performance !== 'undefined' ? performance.now() : Date.now())-started;
+      logApiTiming(`[api:end] ${requestId} GET ${new URL(url,window.location.origin).pathname}`,{
+        status:r.status,
+        totalMs:Math.round(elapsed),
+        serverMs:r.headers.get('X-Process-Time-Ms') ? Number(r.headers.get('X-Process-Time-Ms')) : undefined,
+        serverRequestId:r.headers.get('X-Request-Id') || undefined,
+      });
+      return blob;
+    }catch(error:any){
+      const elapsed=(typeof performance !== 'undefined' ? performance.now() : Date.now())-started;
+      logApiTiming(`[api:end] ${requestId} GET ${url}`,{status:'error',totalMs:Math.round(elapsed),message:error?.message||String(error)});
+      throw error;
+    }
+  },
 };
