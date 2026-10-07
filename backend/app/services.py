@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+import asyncio
 from bson import ObjectId
 from .db import get_db
 
@@ -13,11 +14,14 @@ def _date_match(doc, from_date=None, to_date=None):
     if to_date and d > to_date: return False
     return True
 
-async def tenant_summary(tenant_id: str):
-    db = get_db(); tenant = await db.tenants.find_one({"_id": oid(tenant_id)})
-    tx = await db.transactions.find({"tenant_id": tenant_id}).to_list(20000)
-    expenses = await db.expenses.find({"tenant_id": tenant_id}).to_list(10000)
-    loans = await db.loans.find({"tenant_id": tenant_id}).to_list(10000)
+async def tenant_summary(tenant_id: str, member_id: str | None = None):
+    db = get_db()
+    tenant, tx, expenses, loans = await asyncio.gather(
+        db.tenants.find_one({"_id": oid(tenant_id)}),
+        db.transactions.find({"tenant_id": tenant_id}).to_list(20000),
+        db.expenses.find({"tenant_id": tenant_id}).to_list(10000),
+        db.loans.find({"tenant_id": tenant_id}).to_list(10000),
+    )
     opening_cash = float((tenant or {}).get("opening_cash", 0)); opening_bank = float((tenant or {}).get("opening_bank", 0))
     cash = opening_cash; bank = opening_bank
     contributions = interest = penalties = repayments = disbursed = 0.0
@@ -57,15 +61,29 @@ async def tenant_summary(tenant_id: str):
     for x in expenses:
         if x.get("account") == "bank": bank -= float(x.get("amount",0))
         else: cash -= float(x.get("amount",0))
-    return {"vault_balance": round(cash+bank,2), "cash_balance": round(cash,2), "bank_balance": round(bank,2),
-            "total_contributions": round(contributions,2), "interest_collected": round(interest,2),
+    net_group_vault = round(cash + bank, 2)
+    member_count, total_member_count, total_share_count, active_share_count, inactive_share_count, active_loan_count = await asyncio.gather(
+        db.members.count_documents({"tenant_id":tenant_id,"active":True}),
+        db.members.count_documents({"tenant_id":tenant_id}),
+        db.shares.count_documents({"tenant_id":tenant_id}),
+        db.shares.count_documents({"tenant_id":tenant_id,"status":"active"}),
+        db.shares.count_documents({"tenant_id":tenant_id,"status":{"$ne":"active"}}),
+        db.loans.count_documents({"tenant_id":tenant_id,"status":"active"}),
+    )
+    member_profit = None
+    if member_id:
+        member_share_count = await db.shares.count_documents({"tenant_id":tenant_id,"member_id":member_id,"status":"active"})
+        member_profit = round((profit_income / max(1, active_share_count)) * member_share_count - (exp / max(1, active_share_count)) * member_share_count, 2)
+    return {"vault_balance": net_group_vault, "net_group_vault": net_group_vault, "cash_balance": round(cash,2), "bank_balance": round(bank,2),
+            "total_contributions": round(contributions,2), "member_principal_savings": round(contributions,2), "interest_collected": round(interest,2),
             "penalties": round(penalties,2), "loan_disbursed": round(disbursed,2), "loan_repayments": round(repayments,2),
-            "expenses": round(exp,2), "profit": group_profit, "cash_inflow": cash_inflow, "bank_inflow": bank_inflow_total, "cash_inflow_account": cash_inflow_total, "cash_outflow": cash_outflow, "cash_outflow_account": cash_outflow_total, "bank_outflow": bank_outflow_total, "members": await db.members.count_documents({"tenant_id":tenant_id,"active":True}),
-            "total_members": await db.members.count_documents({"tenant_id":tenant_id}),
-            "total_shares": await db.shares.count_documents({"tenant_id":tenant_id}),
-            "active_shares": await db.shares.count_documents({"tenant_id":tenant_id,"status":"active"}),
-            "inactive_shares": await db.shares.count_documents({"tenant_id":tenant_id,"status":{"$ne":"active"}}),
-            "active_loans": await db.loans.count_documents({"tenant_id":tenant_id,"status":"active"}),
+            "expenses": round(exp,2), "profit": group_profit, "group_total_profit": group_profit, "cash_inflow": cash_inflow, "bank_inflow": bank_inflow_total, "cash_inflow_account": cash_inflow_total, "cash_outflow": cash_outflow, "cash_outflow_account": cash_outflow_total, "bank_outflow": bank_outflow_total, "members": member_count,
+            "total_members": total_member_count,
+            "total_shares": total_share_count,
+            "active_shares": active_share_count,
+            "inactive_shares": inactive_share_count,
+            "active_loans": active_loan_count,
+            "member_profit": member_profit,
             "transactions_count": len(real_tx)}
 
 async def analytics(tenant_id: str, months: int = 12, share_no: int | None = None, member_id: str | None = None):

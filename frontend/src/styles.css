@@ -1661,3 +1661,68 @@ body{background:linear-gradient(145deg,#F1F9F5 0%,#FFFFFF 48%,#EDF7F2 100%)}
 
 /* Final dashboard metric polish */
 .vault-breakdown-row.is-positive{background:#E6F4EA!important;border-color:#c9e8d4!important}.vault-breakdown-row.is-positive strong{color:#137333!important}.vault-breakdown-row.is-negative{background:#FCE8E6!important;border-color:#f2cbc7!important}.vault-breakdown-row.is-negative strong{color:#C5221F!important}.vault-breakdown-row.is-neutral{background:#f6f9f8!important;border-color:#dfeae5!important}.vault-breakdown-row.is-neutral strong{color:#1a2b4c!important}.activity-item>strong{white-space:nowrap;flex:0 0 auto;display:inline-block;word-break:keep-all}.activity-item>div{min-width:0}.activity-item{align-items:center}.activity-item>strong.positive{color:#137333}.activity-item>strong.negative{color:#C5221F}
+
+/* 2026 UX polish: compact search clear affordance */
+.search-field-wrap{position:relative;flex:1;min-width:0}
+.search-field-wrap .data-search{width:100%;padding-right:42px}
+.search-clear-btn{position:absolute;right:7px;top:50%;transform:translateY(-50%);width:30px;height:30px;border:0;border-radius:999px;background:#eef3f1;color:#627482;display:grid;place-items:center;cursor:pointer}
+.search-clear-btn:hover{background:#e2ebe7;color:var(--bb-navy)}
+
+/* Password action remains vertically centered even when the mobile keyboard changes viewport height. */
+.login-reference-page{min-height:100dvh!important;scroll-padding-bottom:28px}
+.login-reference-stack .input{line-height:1.25!important;padding-top:0!important;padding-bottom:0!important}
+.login-reference-stack .password-input{position:relative;display:flex;align-items:center}
+.login-reference-stack .password-toggle{top:50%!important;transform:translateY(-50%)!important;margin:0!important;display:grid;place-items:center}
+
+/* Analytics loading skeleton */
+.analytics-skeleton-wrap{margin-top:16px;display:grid;gap:16px}
+.analytics-skeleton-wrap .dashboard-metrics{margin-top:0}
+.skeleton-card{height:92px;border:1px solid #dfe9e5;border-radius:22px;background:linear-gradient(90deg,#f4f7f6 0%,#fbfdfc 45%,#f4f7f6 90%);background-size:220% 100%;animation:bb-shimmer 1.25s ease-in-out infinite;padding:18px;display:grid;gap:8px}
+.skeleton-card span,.skeleton-card strong,.skeleton-card em,.skeleton-line{display:block;border-radius:999px;background:#e5eeea;animation:bb-pulse 1.15s ease-in-out infinite}
+.skeleton-card span{width:38%;height:8px}.skeleton-card strong{width:65%;height:18px}.skeleton-card em{width:48%;height:7px}
+.analytics-skeleton-chart{min-height:360px;padding:18px!important}
+.skeleton-line{height:12px}.skeleton-line.wide{width:32%}.skeleton-line.short{width:20%;margin-top:6px;height:8px}
+.skeleton-chart{height:245px;margin-top:22px;border-radius:16px;background:repeating-linear-gradient(to bottom,transparent 0,transparent 47px,#e8efec 48px);display:flex;align-items:flex-end;justify-content:space-around;padding:18px 7% 0}
+.skeleton-chart i{display:block;width:9%;max-width:34px;border-radius:10px 10px 2px 2px;background:#dce9e4;animation:bb-pulse 1.2s ease-in-out infinite}
+.skeleton-chart i:nth-child(1){height:42%}.skeleton-chart i:nth-child(2){height:70%}.skeleton-chart i:nth-child(3){height:55%}.skeleton-chart i:nth-child(4){height:82%}.skeleton-chart i:nth-child(5){height:62%}
+@keyframes bb-shimmer{0%{background-position:180% 0}100%{background-position:-40% 0}}
+@keyframes bb-pulse{0%,100%{opacity:.55}50%{opacity:1}}
+
+/* Extra chart breathing room keeps month labels and legend/badges readable on phones. */
+.chart-plot{padding-bottom:18px!important;box-sizing:border-box}
+
+/* Zero/empty metrics stay neutral instead of looking like an active inflow/outflow. */
+.metric-neutral{background:#f7f9f8!important;border-color:#dce5e2!important;color:#687887!important}
+.metric-neutral strong{color:#687887!important}
+
+/* Primary dashboard group-profit metric */
+.vault-primary-grid.has-group-profit{grid-template-columns:repeat(4,minmax(0,1fr))}
+@media(max-width:900px){.vault-primary-grid.has-group-profit{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:560px){.vault-primary-grid.has-group-profit{grid-template-columns:1fr 1fr}.vault-primary-grid.has-group-profit .vault-hero-savings{grid-column:1/-1}}
+
+/* Uniform action-sheet / more-drawer icon rhythm */
+.more-item svg,.action-sheet-item svg{width:24px!important;height:24px!important;flex:0 0 24px}
+
+.bb-toast{position:fixed;z-index:9999;left:50%;bottom:calc(82px + env(safe-area-inset-bottom));transform:translateX(-50%);max-width:min(88vw,420px);padding:11px 16px;border:1px solid #cfe3da;border-radius:999px;background:rgba(20,48,70,.96);color:#fff;font-size:12px;font-weight:800;box-shadow:0 14px 34px rgba(26,43,76,.22);backdrop-filter:blur(12px);animation:bb-toast-in .2s ease-out}
+@keyframes bb-toast-in{from{opacity:0;transform:translate(-50%,8px)}to{opacity:1;transform:translate(-50%,0)}}
+
+
+/* Final mobile/accounting polish — 2026 */
+.activity-item{align-items:center!important;}
+.activity-item>div{min-width:0;flex:1 1 auto;}
+.activity-item .activity-amount{display:block!important;flex:0 0 auto!important;white-space:nowrap!important;word-break:keep-all!important;overflow-wrap:normal!important;line-height:1.15!important;font-size:15px!important;font-weight:950!important;letter-spacing:-.01em;}
+.activity-item .activity-amount.neutral{color:#66788A!important;}
+.search-field-wrap{position:relative;}
+.data-search{padding-right:44px!important;}
+.search-clear-btn{z-index:2;}
+.login-reference-stack .password-input{min-height:48px;align-items:center!important;}
+.login-reference-stack .password-toggle{top:50%!important;right:6px!important;transform:translateY(-50%)!important;height:36px!important;min-height:36px!important;display:grid!important;place-items:center!important;}
+.login-reference-stack .input{box-sizing:border-box;}
+.loan-modal{width:min(680px,100%)!important;max-height:min(88svh,820px)!important;margin-top:12px;}
+.loan-modal .modal-body{overflow-y:auto!important;overscroll-behavior:contain;}
+@media(max-width:700px){
+  .activity-item{gap:8px!important;padding:12px 11px!important;}
+  .activity-item .activity-amount{font-size:14px!important;}
+  .loan-modal{width:100%!important;max-height:calc(100svh - 24px)!important;margin-top:8px!important;}
+  .modal-backdrop:has(.loan-modal){align-items:flex-start!important;padding:8px!important;padding-top:max(8px,env(safe-area-inset-top))!important;}
+}

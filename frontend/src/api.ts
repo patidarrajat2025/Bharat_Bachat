@@ -66,7 +66,7 @@ export const api={
  createAdmin:(body:any)=>request<any>('/super-admin/admins',{method:'POST',body:JSON.stringify(body)}),
  adminStatus:(id:string,active:boolean)=>request<any>(`/super-admin/users/${id}/status`,{method:'PATCH',body:JSON.stringify({active})}),
  resetUserPassword:(id:string,password:string)=>request<any>(`/super-admin/users/${id}/reset-password`,{method:'POST',body:JSON.stringify({password})}),
- summary:(id:string)=>request<any>(`/group/${id}/summary`),
+ summary:(id:string,memberId?:string)=>request<any>(`/group/${id}/summary${memberId?`?member_id=${encodeURIComponent(memberId)}`:''}`),
  tenant:(id:string)=>request<Tenant>(`/group/${id}`),
  analytics:(id:string,months?:number,shareNo?:number,memberId?:string)=>{const q=new URLSearchParams();if(months!==undefined)q.set('months',String(months));if(shareNo!==undefined)q.set('share_no',String(shareNo));if(memberId)q.set('member_id',memberId);const qs=q.toString();return request<any[]>(`/group/${id}/analytics${qs?`?${qs}`:''}`)},
  members:(id:string)=>request<Member[]>(`/group/${id}/members`),

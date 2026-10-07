@@ -60,12 +60,14 @@ export function ThemeSettings({onDone}:{onDone?:()=>void}={}){
 
 export function Pagination({page,total,pageSize=5,onChange}:{page:number;total:number;pageSize?:number;onChange:(p:number)=>void}){const pages=Math.max(1,Math.ceil(total/pageSize));if(total<=pageSize)return null;return <div className="pagination"><button disabled={page<=1} onClick={()=>onChange(page-1)}>{tr('Previous')}</button>{Array.from({length:pages},(_,i)=>i+1).slice(Math.max(0,page-3),Math.min(pages,page+2)).map(p=><button key={p} className={p===page?'active':''} onClick={()=>onChange(p)}>{p}</button>)}<button disabled={page>=pages} onClick={()=>onChange(page+1)}>{tr('Next')}</button></div>}
 
+export function SearchField({value,onChange,placeholder,ariaLabel}:{value:string;onChange:(value:string)=>void;placeholder:string;ariaLabel?:string}){return <div className="search-field-wrap"><input className="data-search" value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder} aria-label={ariaLabel||placeholder}/>{value&&<button type="button" className="search-clear-btn" aria-label={tr('Clear')} onClick={()=>onChange('')}><X size={17}/></button>}</div>}
+
 export function ActivityAccordion({items}:{items:{title:string;meta:string;value:string;tone?:'positive'|'negative'|'neutral';sortKey?:string}[]}){
   const [open,setOpen]=useState(false); const [page,setPage]=useState(1); const pageSize=10;
   const sorted=useMemo(()=>items.slice().sort((a,b)=>String(b.sortKey||'').localeCompare(String(a.sortKey||''))),[items]);
   const pages=Math.max(1,Math.ceil(sorted.length/pageSize));
   useEffect(()=>{if(page>pages)setPage(1)},[pages,page]);
-  return <section className="card activity-accordion"><button className="activity-toggle" onClick={()=>setOpen(v=>!v)}><span><b>{tr('Latest Activity')}</b><small>{tr('View Activity / गतिविधियां देखें')} · {sorted.length} {tr('entries')}</small></span><ChevronDown className={open?'rotated':''} size={19}/></button>{open&&<><div className="activity-list">{sorted.slice((page-1)*pageSize,page*pageSize).map((x,i)=><div className="activity-item" key={`${x.sortKey||''}-${i}`}><div><b>{x.title}</b><span>{x.meta}</span></div><strong className={x.tone==='negative'?'negative':'positive'}>{x.value}</strong></div>)}{!sorted.length&&<div className="empty-state">{tr('No data yet')}</div>}</div>{pages>1&&<Pagination page={page} total={sorted.length} pageSize={pageSize} onChange={setPage}/>}</>}</section>}
+  return <section className="card activity-accordion"><button className="activity-toggle" onClick={()=>setOpen(v=>!v)}><span><b>{tr('Latest Activity')}</b><small>{tr('View Activity / गतिविधियां देखें')} · {sorted.length} {tr('entries')}</small></span><ChevronDown className={open?'rotated':''} size={19}/></button>{open&&<><div className="activity-list">{sorted.slice((page-1)*pageSize,page*pageSize).map((x,i)=><div className="activity-item" key={`${x.sortKey||''}-${i}`}><div><b>{x.title}</b><span>{x.meta}</span></div><strong className={`activity-amount ${x.tone==='negative'?'negative':x.tone==='neutral'?'neutral':'positive'}`}>{x.value}</strong></div>)}{!sorted.length&&<div className="empty-state">{tr('No data yet')}</div>}</div>{pages>1&&<Pagination page={page} total={sorted.length} pageSize={pageSize} onChange={setPage}/>}</>}</section>}
 
 function InstallButton(){
   const {t}=useTranslation();
@@ -92,7 +94,7 @@ export function Layout({children}:{children:ReactNode}){
   const profileRef=useRef<HTMLDivElement|null>(null);
   const [settings,setSettings]=useState(false);
   const [unread,setUnread]=useState(0);
-  const [notifications,setNotifications]=useState<any[]>([]); const [notifOpen,setNotifOpen]=useState(false);
+  const [notifications,setNotifications]=useState<any[]>([]); const [notifOpen,setNotifOpen]=useState(false); const [toast,setToast]=useState('');
   const refreshNotifications=async(openTray=false)=>{if(!user?.tenant_id)return;try{const rows=await api.notifications(user.tenant_id);const unreadRows=rows.filter((n:any)=>!n.read);setUnread(unreadRows.length);setNotifications(rows);if(openTray&&unreadRows.length){await Promise.all(unreadRows.map((n:any)=>api.markNotificationRead(user.tenant_id!,n._id).catch(()=>null)));setNotifications(rows.map((n:any)=>({...n,read:true})));setUnread(0)}}catch{}};
   const closeNotifications=async()=>{setNotifOpen(false);if(!user?.tenant_id||!notifications.length)return;const ids=notifications.map((n:any)=>n._id).filter(Boolean);try{await api.clearNotifications(user.tenant_id,ids);setNotifications([]);setUnread(0)}catch{}};
   const allowed=user?.role==='member'
@@ -105,6 +107,7 @@ export function Layout({children}:{children:ReactNode}){
   const hasMore=visible.length>4;
   const active=visible.find(x=>loc.pathname===x[0] || (x[0] !== '/dashboard' && loc.pathname.startsWith(`${x[0]}/`)));
   useEffect(()=>{setMore(false);setProfile(false)},[loc.pathname]);
+  useEffect(()=>{const h=(e:Event)=>{const d=(e as CustomEvent).detail;setToast(String(d?.message||''));window.setTimeout(()=>setToast(''),2200)};window.addEventListener('bb-toast',h);return()=>window.removeEventListener('bb-toast',h)},[]);
   useEffect(()=>{
     if(!profile)return;
     const close=(event:PointerEvent)=>{const target=event.target as Node|null;if(profileRef.current&&!profileRef.current.contains(target))setProfile(false)};
@@ -161,6 +164,7 @@ export function Layout({children}:{children:ReactNode}){
 
     {notifOpen&&<div className="notification-overlay" onMouseDown={e=>{if(e.target===e.currentTarget)closeNotifications()}}><div className="notification-panel"><div className="notification-head"><div><b>{tr('Notifications')}</b><span>{notifications.length} {tr('entries')}</span></div><button className="icon-btn" onClick={closeNotifications}><X size={18}/></button></div><div className="notification-list">{notifications.map((n:any)=><div className={`notification-item ${n.read?'read':''}`} key={n._id}><div><b>{n.title}</b><p>{n.body}</p><small>{n.created_at?new Date(n.created_at).toLocaleString():''}</small></div><button className="notification-delete" onClick={async()=>{try{if(user?.tenant_id)await api.deleteNotification(user.tenant_id,n._id);setNotifications(x=>x.filter(v=>v._id!==n._id));setUnread(x=>Math.max(0,x-(n.read?0:1)))}catch{}}}><X size={15}/></button></div>)}{!notifications.length&&<div className="empty-state">{tr('No data yet')}</div>}</div></div></div>}
     {settings&&<Modal title={tr('Settings')} onClose={()=>setSettings(false)}><ThemeSettings onDone={()=>setSettings(false)}/></Modal>}
+    {toast&&<div className="bb-toast" role="status">{toast}</div>}
     {more&&<div className="mobile-more-overlay" onClick={()=>setMore(false)}>
       <div className="mobile-more-sheet safe-bottom" onClick={e=>e.stopPropagation()}>
         <div className="sheet-handle"/>

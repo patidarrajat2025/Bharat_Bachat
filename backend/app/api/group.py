@@ -54,7 +54,12 @@ async def upload_group_logo(tenant_id:str,file:UploadFile=File(...),user=Depends
 
 @router.get("/{tenant_id}/summary")
 async def summary(tenant_id:str,user=Depends(current_user)):
-    await tenant_guard(user,tenant_id); return await tenant_summary(tenant_id)
+    await tenant_guard(user,tenant_id)
+    member_id = str(user.get("member_id") or "") if user.get("role") in ("member", "group_admin") else ""
+    if user.get("role") == "group_admin" and not member_id:
+        from ..share_service import ensure_group_admin_member
+        member_id = str(await ensure_group_admin_member(user) or "")
+    return await tenant_summary(tenant_id, member_id or None)
 
 @router.get("/{tenant_id}/analytics")
 async def get_analytics(tenant_id:str,months:int=12,share_no:int|None=None,member_id:str|None=None,user=Depends(current_user)):
