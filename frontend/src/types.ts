@@ -1,7 +1,7 @@
 export type Role='super_admin'|'group_admin'|'member';
 export type User={id:string;phone:string;name:string;role:Role;tenant_id:string|null;member_id?:string;must_change_password?:boolean;profile_image_url?:string|null;profile_picture_url?:string|null};
 export type Tenant={_id:string;name:string;code:string;logo_url?:string|null;active:boolean;opening_cash?:number;opening_bank?:number;kist_per_share?:number};
-export type Member={_id:string;first_name:string;last_name:string;phone:string;secondary_phone?:string;email?:string;address?:string;shares:number;active_shares_count?:number;share_ids?:string[];active?:boolean;profile_image_url?:string|null;profile_picture_url?:string|null};
+export type Member={_id:string;first_name:string;last_name:string;phone:string;secondary_phone?:string;email?:string;address?:string;shares:number;active_shares_count?:number;share_ids?:string[];share_numbers?:number[];active?:boolean;profile_image_url?:string|null;profile_picture_url?:string|null};
 export type Share={_id:string;tenant_id:string;member_id:string;share_no:number;share_code:string;status:'active'|'closed'|'cancelled';created_at:string};
 export type Loan={_id:string;member_id:string;principal:number;interest_rate:number;months:number;expected_interest:number;principal_paid:number;interest_paid:number;status:string;purpose?:string;created_at:string};
 export type Transaction={_id:string;created_at?:string;member_id?:string;share_id?:string;type:string;amount:number;principal?:number;interest?:number;date:string;share_no?:number;note?:string;account?:string;running_balance?:number;loan_id?:string;payment_category?:string;period?:string;expected_amount?:number;paid_amount?:number;status?:string};

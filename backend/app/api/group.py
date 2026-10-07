@@ -53,6 +53,42 @@ async def upload_group_logo(tenant_id:str,file:UploadFile=File(...),user=Depends
     await audit(tenant_id,user,"GROUP_LOGO_UPDATED","tenant",tenant_id)
     return {"ok":True,"logo_url":r.get("secure_url")}
 
+@router.get("/{tenant_id}/dashboard")
+async def dashboard(tenant_id:str,user=Depends(current_user)):
+    """Single read model for the main dashboard.
+
+    The browser used to open 5-7 independent endpoints on every dashboard mount.
+    We keep those endpoints for compatibility, but the dashboard can now be
+    hydrated with one HTTP request while MongoDB work runs concurrently.
+    """
+    await tenant_guard(user,tenant_id)
+    db=get_db()
+    from ..share_service import ensure_group_admin_member
+    member_id=str(user.get("member_id") or "")
+    if user.get("role")=="group_admin" and not member_id:
+        member_id=str(await ensure_group_admin_member(user) or "")
+
+    summary_task=tenant_summary(tenant_id,member_id or None)
+    tenant_task=db.tenants.find_one({"_id":parse_oid(tenant_id)})
+    members_task=members(tenant_id,user)
+    activity_task=group_activity(tenant_id,user)
+    # Monthly status is intentionally kept compatible with the existing UI.
+    month=datetime.now(timezone.utc).strftime("%Y-%m")
+    kist_task=monthly_kist_summary(tenant_id,month,user)
+    if member_id:
+        passbook_task=passbook(tenant_id,member_id,user=user)
+        loans_task=loans(tenant_id,member_id,user=user)
+        shares_task=member_shares(tenant_id,member_id,user=user)
+    else:
+        passbook_task=asyncio.sleep(0,result=[])
+        loans_task=asyncio.sleep(0,result=[])
+        shares_task=asyncio.sleep(0,result=[])
+    summary_row, tenant_row, member_rows, activity_rows, kist_row, personal_rows, personal_loans, shares_rows = await asyncio.gather(
+        summary_task, tenant_task, members_task, activity_task, kist_task, passbook_task, loans_task, shares_task
+    )
+    if not tenant_row: raise HTTPException(404,"Group not found")
+    return {"tenant":serialize(tenant_row),"summary":summary_row,"members":member_rows,"activity":activity_rows,"kist":kist_row,"personal":personal_rows,"personal_loans":personal_loans,"shares":shares_rows}
+
 @router.get("/{tenant_id}/summary")
 async def summary(tenant_id:str,user=Depends(current_user)):
     await tenant_guard(user,tenant_id)
@@ -78,6 +114,12 @@ async def get_analytics(tenant_id:str,months:int=12,share_no:int|None=None,membe
 
 @router.get("/{tenant_id}/notifications")
 async def notifications(tenant_id:str,user=Depends(current_user)):
+    """Read-only notification feed.
+
+    Notification creation is event-driven now. The previous GET endpoint created
+    notifications from recent loans/audit/transactions on every page mount, which
+    made a harmless bell refresh perform dozens of MongoDB writes.
+    """
     await tenant_guard(user,tenant_id)
     db=get_db()
     if user["role"] in ("group_admin","super_admin"):
@@ -87,10 +129,33 @@ async def notifications(tenant_id:str,user=Depends(current_user)):
         if not mid: return []
         q={"tenant_id":tenant_id,"recipient_role":"member","recipient_member_id":mid,"dismissed":{"$ne":True}}
     try:
-        rows=await db.notifications.find(q).sort("created_at",-1).limit(30).to_list(30)
+        rows=await db.notifications.find(q).sort("created_at",-1).limit(20).to_list(20)
+        # Compatibility bootstrap only: if this tenant has never had any
+        # notification records, seed a small initial feed once. Subsequent GETs
+        # are read-only and never recreate dismissed notifications.
+        any_existing=await db.notifications.find_one({"tenant_id":tenant_id,"source_key":{"$exists":True}}, {"_id":1})
+        if not rows and not any_existing:
+            if user["role"] in ("group_admin","super_admin"):
+                seeds=await db.audit_logs.find({"tenant_id":tenant_id}).sort("created_at",-1).limit(10).to_list(10)
+                for item in seeds:
+                    key=f"audit:{item['_id']}"
+                    await _create_notification(tenant_id,role="admin",source_key=key,title=str(item.get("action","Activity")).replace("_"," ").title(),body="New group activity recorded.",created_at=item.get("created_at"))
+            else:
+                mid=str(user.get("member_id") or "")
+                seeds=await db.transactions.find({"tenant_id":tenant_id,"member_id":mid}).sort("date",-1).limit(10).to_list(10)
+                for item in seeds:
+                    key=f"tx:{item['_id']}:{mid}"
+                    await _create_notification(tenant_id,role="member",member_id=mid,source_key=key,title="Account activity",body=f"{str(item.get('type','Transaction')).replace('_',' ').title()} ₹{float(item.get('amount',0)):,.2f}.",created_at=item.get("date"))
+            rows=await db.notifications.find(q).sort("created_at",-1).limit(20).to_list(20)
         return [serialize(x) for x in rows]
     except Exception:
         return []
+
+async def _create_notification(tenant_id:str, *, role:str, title:str, body:str, source_key:str, member_id:str|None=None, created_at=None):
+    db=get_db()
+    doc={"tenant_id":tenant_id,"recipient_role":role,"title":title,"body":body,"read":False,"created_at":created_at or datetime.now(timezone.utc),"source_key":source_key}
+    if member_id: doc["recipient_member_id"]=member_id
+    await db.notifications.update_one({"tenant_id":tenant_id,"source_key":source_key},{"$setOnInsert":doc},upsert=True)
 
 @router.post("/{tenant_id}/notifications/clear")
 async def clear_notifications(tenant_id:str,body:dict,user=Depends(current_user)):
@@ -115,21 +180,6 @@ async def clear_notifications(tenant_id:str,body:dict,user=Depends(current_user)
         result=await db.notifications.update_many(q,{"$set":{"dismissed":True,"dismissed_at":datetime.now(timezone.utc)}})
         return {"ok":True,"count":result.modified_count}
     return {"ok":True,"count":0}
-
-@router.post("/{tenant_id}/notifications/read-batch")
-async def mark_notifications_read_batch(tenant_id:str,body:dict,user=Depends(current_user)):
-    await tenant_guard(user,tenant_id); db=get_db()
-    ids=[str(x) for x in (body.get("ids") or []) if str(x)]
-    from bson import ObjectId
-    valid=[]
-    for x in ids:
-        try: valid.append(ObjectId(x))
-        except Exception: pass
-    if not valid: return {"ok":True,"count":0}
-    q={"_id":{"$in":valid},"tenant_id":tenant_id}
-    if user["role"]=="member": q["recipient_member_id"]=str(user.get("member_id") or "")
-    result=await db.notifications.update_many(q,{"$set":{"read":True}})
-    return {"ok":True,"count":result.modified_count}
 
 @router.delete("/{tenant_id}/notifications/batch")
 async def delete_notifications_batch(tenant_id:str,body:dict,user=Depends(current_user)):
@@ -170,13 +220,25 @@ async def delete_notification(tenant_id:str,notification_id:str,user=Depends(cur
 
 @router.get("/{tenant_id}/members")
 async def members(tenant_id:str,user=Depends(current_user)):
-    await tenant_guard(user,tenant_id); q={"tenant_id":tenant_id}
+    await tenant_guard(user,tenant_id); db=get_db(); q={"tenant_id":tenant_id}
     if user["role"]=="member": q["_id"]=parse_oid(user.get("member_id"))
-    rows=await get_db().members.find(q).sort("first_name",1).to_list(2000)
+    rows=await db.members.find(q).sort("first_name",1).to_list(2000)
+    ids=[str(row["_id"]) for row in rows]
+    share_rows=await db.shares.find({"tenant_id":tenant_id,"member_id":{"$in":ids},"status":"active"}).sort("share_no",1).to_list(20000) if ids else []
+    share_map={mid:[] for mid in ids}
+    for share in share_rows: share_map.setdefault(str(share["member_id"]),[]).append(share)
+    # Reconcile only legacy/incomplete member share records. Normal reads remain read-only.
+    for row in rows:
+        mid=str(row["_id"]); expected=max(1,int(row.get("shares",1) or 1))
+        if len(share_map.get(mid,[]))<expected:
+            share_map[mid]=await ensure_member_shares(row)
     out=[]
     for row in rows:
-        active_shares=await ensure_member_shares(row)
-        x=serialize(row); x["profile_picture_url"]=x.get("profile_picture_url") or x.get("profile_image_url"); x["active_shares_count"]=len(active_shares); x["share_ids"]=[str(s["_id"]) for s in active_shares]; out.append(x)
+        active_shares=share_map.get(str(row["_id"]),[])
+        x=serialize(row); x["profile_picture_url"]=x.get("profile_picture_url") or x.get("profile_image_url")
+        x["active_shares_count"]=len(active_shares); x["share_ids"]= [str(s["_id"]) for s in active_shares]
+        x["share_numbers"]=[int(s.get("share_no",0)) for s in active_shares]
+        out.append(x)
     return out
 
 @router.post("/{tenant_id}/members")
@@ -208,12 +270,22 @@ async def update_member(tenant_id:str,member_id:str,body:MemberUpdate,user=Depen
     await db.users.update_one({"member_id":member_id,"tenant_id":parse_oid(tenant_id)},{"$set":{"name":f"{body.first_name} {body.last_name}".strip(),"email":body.email,"phone":m["phone"]}})
     await audit(tenant_id,user,"MEMBER_UPDATED","member",member_id,{"shares":body.shares}); return {"ok":True}
 
-@router.get("/{tenant_id}/members/{member_id}")
-async def member_detail(tenant_id:str,member_id:str,user=Depends(current_user)):
+@router.get("/{tenant_id}/members/{member_id}/details")
+async def member_details(tenant_id:str,member_id:str,user=Depends(current_user)):
+    """Focused member read model; never downloads the whole group's loan ledger."""
     await tenant_guard(user,tenant_id)
     if user["role"]=="member" and str(user.get("member_id"))!=member_id:
         raise HTTPException(403,"Member access denied")
-    return serialize(await get_member(get_db(),tenant_id,member_id))
+    db=get_db()
+    member=await get_member(db,tenant_id,member_id)
+    member_row, shares_row, passbook_row, loans_row, summary_row = await asyncio.gather(
+        asyncio.sleep(0,result=serialize(member)),
+        ensure_member_shares(member),
+        passbook(tenant_id,member_id,user=user),
+        loans(tenant_id,member_id,user=user),
+        tenant_summary(tenant_id,member_id),
+    )
+    return {"member":member_row,"shares":[serialize(x) for x in shares_row],"passbook":passbook_row,"loans":loans_row,"summary":summary_row}
 
 @router.get("/{tenant_id}/members/{member_id}/shares")
 async def member_shares(tenant_id:str,member_id:str,user=Depends(current_user)):
@@ -275,17 +347,11 @@ async def ensure_share(member,share_no):
 async def insert_tx(tenant_id,member_id,typ,amount,account,user,**extra):
     db=get_db(); now=datetime.now(timezone.utc); doc={"tenant_id":tenant_id,"member_id":member_id,"type":typ,"amount":amount,"account":account,"created_at":now,**extra}
     r=await db.transactions.insert_one(doc)
-    if member_id:
-        key=f"tx:{r.inserted_id}:{member_id}"
-        try:
-            await db.notifications.update_one(
-                {"tenant_id":tenant_id,"source_key":key},
-                {"$setOnInsert": {"tenant_id":tenant_id,"source_key":key,"recipient_role":"member","recipient_member_id":str(member_id),"type":"transaction","title":"Account activity","body":f"{str(typ).replace('_',' ').title()} ₹{abs(float(amount or 0)):,.2f}.","read":False,"created_at":extra.get("date",now)}},
-                upsert=True
-            )
-        except Exception:
-            pass
     await audit(tenant_id,user,f"{typ.upper()}_POSTED","transaction",str(r.inserted_id),{"amount":amount})
+    if member_id and typ != "expense_allocation":
+        await _create_notification(tenant_id,role="member",member_id=str(member_id),source_key=f"tx:{r.inserted_id}:{member_id}",title="Account activity",body=f"{str(typ).replace('_',' ').title()} ₹{float(amount):,.2f}.",created_at=extra.get("date",now))
+    if user.get("role") in ("member","group_admin") and typ != "expense_allocation":
+        await _create_notification(tenant_id,role="admin",source_key=f"admin-tx:{r.inserted_id}",title="Group activity",body=f"{str(typ).replace('_',' ').title()} ₹{float(amount):,.2f}.",created_at=extra.get("date",now))
     return str(r.inserted_id)
 
 @router.post("/{tenant_id}/contributions")
@@ -302,33 +368,39 @@ async def monthly_kist_summary(tenant_id:str,period:str,user=Depends(current_use
     y,m=map(int,period.split("-")); start=datetime(y,m,1,tzinfo=timezone.utc); end=datetime(y+1,1,1,tzinfo=timezone.utc) if m==12 else datetime(y,m+1,1,tzinfo=timezone.utc)
     tenant=await db.tenants.find_one({"_id":parse_oid(tenant_id)})
     expected_per_share=float((tenant or {}).get("kist_per_share",500))
-    members=await db.members.find({"tenant_id":tenant_id,"active":True},{"first_name":1,"last_name":1,"phone":1,"shares":1}).to_list(5000)
+    members=await db.members.find({"tenant_id":tenant_id,"active":True}).sort("first_name",1).to_list(5000)
     if user["role"]=="member": members=[m for m in members if str(m["_id"])==str(user.get("member_id"))]
-    tx_rows, expense_rows, share_rows = await asyncio.gather(
-        db.transactions.find({"tenant_id":tenant_id,"type":"contribution","$or":[{"payment_category":"monthly_kist"},{"payment_category":{"$exists":False}}],"date":{"$gte":start,"$lt":end}}, {"member_id":1,"share_id":1,"share_no":1,"amount":1}).to_list(20000),
-        db.expenses.find({"tenant_id":tenant_id,"date":{"$gte":start,"$lt":end}},{"amount":1}).to_list(20000),
-        db.shares.find({"tenant_id":tenant_id,"status":"active"},{"member_id":1,"share_no":1}).sort("share_no",1).to_list(20000),
-    )
-    group_expenses=round(sum(float(x.get("amount",0) or 0) for x in expense_rows),2)
+    member_ids=[str(m["_id"]) for m in members]
+    shares=await db.shares.find({"tenant_id":tenant_id,"member_id":{"$in":member_ids},"status":"active"}).sort("share_no",1).to_list(20000) if member_ids else []
+    shares_by_member={mid:[] for mid in member_ids}
+    for sh in shares: shares_by_member.setdefault(str(sh["member_id"]),[]).append(sh)
+    for member in members:
+        mid=str(member["_id"]); expected_count=max(1,int(member.get("shares",1) or 1))
+        if len(shares_by_member.get(mid,[]))<expected_count:
+            shares_by_member[mid]=await ensure_member_shares(member)
+    tx_rows=await db.transactions.aggregate([
+        {"$match":{"tenant_id":tenant_id,"type":"contribution","$or":[{"payment_category":"monthly_kist"},{"payment_category":{"$exists":False}}],"date":{"$gte":start,"$lt":end}}},
+        {"$group":{"_id":{"share_id":"$share_id","member_id":"$member_id","share_no":"$share_no"},"paid":{"$sum":{"$convert":{"input":{"$ifNull":["$amount",0]},"to":"double","onError":0,"onNull":0}}}}}
+    ]).to_list(None)
     paid_by_share={}; paid_by_legacy={}
     for x in tx_rows:
-        amount=float(x.get("amount",0) or 0); sid=x.get("share_id")
-        if sid: paid_by_share[str(sid)]=paid_by_share.get(str(sid),0)+amount
-        elif x.get("member_id") is not None and x.get("share_no") is not None:
-            key=(str(x.get("member_id")),int(x.get("share_no"))); paid_by_legacy[key]=paid_by_legacy.get(key,0)+amount
-    shares_by_member={}
-    for sh in share_rows: shares_by_member.setdefault(str(sh["member_id"]),[]).append(sh)
-    expected=paid=paid_shares=partial_shares=pending_shares=0
+        key=x.get("_id") or {}; paid=float(x.get("paid",0) or 0); sid=key.get("share_id")
+        if sid: paid_by_share[str(sid)]=paid
+        elif key.get("member_id") is not None and key.get("share_no") is not None: paid_by_legacy[(str(key.get("member_id")),int(key.get("share_no")))]=paid
+    exp_row=await db.expenses.aggregate([
+        {"$match":{"tenant_id":tenant_id,"date":{"$gte":start,"$lt":end}}},
+        {"$group":{"_id":None,"total":{"$sum":{"$convert":{"input":{"$ifNull":["$amount",0]},"to":"double","onError":0,"onNull":0}}}}}
+    ]).to_list(1)
+    group_expenses=round(float((exp_row[0] if exp_row else {}).get("total",0) or 0),2)
+    expected=paid=paid_shares=partial_shares=pending_shares=0.0
     for member in members:
-        shares=shares_by_member.get(str(member["_id"]),[])
-        # Legacy member records can predate the shares collection; do not mutate the DB from a GET.
-        if not shares: shares=[{"_id":None,"member_id":str(member["_id"]),"share_no":no} for no in range(1,int(member.get("shares",1) or 1)+1)]
-        for share in shares:
-            sid=str(share.get("_id") or ""); p=float(paid_by_share.get(sid,0) + paid_by_legacy.get((str(member["_id"]),int(share["share_no"])),0)); p=round(p,2); expected+=expected_per_share; paid+=min(p,expected_per_share); remaining=max(0,round(expected_per_share-p,2))
+        for share in shares_by_member.get(str(member["_id"]),[]):
+            sid=str(share["_id"]); p=round(float(paid_by_share.get(sid,0))+float(paid_by_legacy.get((str(member["_id"]),int(share["share_no"])),0)),2)
+            expected+=expected_per_share; paid+=min(p,expected_per_share); remaining=max(0,round(expected_per_share-p,2))
             if remaining<=0.009: paid_shares+=1
             elif p>0: partial_shares+=1
             else: pending_shares+=1
-    return {"period":period,"expected_total":round(expected,2),"paid_total":round(paid,2),"pending_total":round(max(0,expected-paid),2),"paid_shares":paid_shares,"partial_shares":partial_shares,"pending_shares":pending_shares,"active_members":len(members),"group_expenses":group_expenses}
+    return {"period":period,"expected_total":round(expected,2),"paid_total":round(paid,2),"pending_total":round(max(0,expected-paid),2),"paid_shares":int(paid_shares),"partial_shares":int(partial_shares),"pending_shares":int(pending_shares),"active_members":len(members),"group_expenses":group_expenses}
 
 @router.get("/{tenant_id}/monthly-kist/{member_id}")
 async def monthly_kist_status(tenant_id:str,member_id:str,period:str,user=Depends(admin_user)):
@@ -337,12 +409,21 @@ async def monthly_kist_status(tenant_id:str,member_id:str,period:str,user=Depend
     if not tenant: raise HTTPException(404,"Group not found")
     import re
     if not re.fullmatch(r"\d{4}-\d{2}",period): raise HTTPException(400,"Period must be YYYY-MM")
+    y,m=map(int,period.split("-")); start=datetime(y,m,1,tzinfo=timezone.utc); end=datetime(y+1,1,1,tzinfo=timezone.utc) if m==12 else datetime(y,m+1,1,tzinfo=timezone.utc)
     shares=await ensure_member_shares(member); expected=float(tenant.get("kist_per_share",500))
+    tx_rows=await db.transactions.aggregate([
+        {"$match":{"tenant_id":tenant_id,"member_id":member_id,"type":"contribution","$or":[{"payment_category":"monthly_kist"},{"payment_category":{"$exists":False}}],"date":{"$gte":start,"$lt":end}}},
+        {"$group":{"_id":{"share_id":"$share_id","share_no":"$share_no"},"paid":{"$sum":{"$convert":{"input":{"$ifNull":["$amount",0]},"to":"double","onError":0,"onNull":0}}}}}
+    ]).to_list(None)
+    paid_by_share={}; paid_by_no={}
+    for x in tx_rows:
+        key=x.get("_id") or {}; paid=float(x.get("paid",0) or 0)
+        if key.get("share_id"): paid_by_share[str(key["share_id"])]=paid
+        elif key.get("share_no") is not None: paid_by_no[int(key["share_no"])]=paid
     out=[]
     for share in shares:
-        y,m=map(int,period.split("-")); start=datetime(y,m,1,tzinfo=timezone.utc); end=datetime(y+1,1,1,tzinfo=timezone.utc) if m==12 else datetime(y,m+1,1,tzinfo=timezone.utc)
-        paid_rows=await db.transactions.find({"tenant_id":tenant_id,"member_id":member_id,"type":"contribution","$and":[{"$or":[{"share_id":str(share["_id"])},{"share_no":int(share["share_no"]),"share_id":{"$exists":False}}]},{"$or":[{"payment_category":"monthly_kist"},{"payment_category":{"$exists":False}}]}],"date":{"$gte":start,"$lt":end}}).to_list(500)
-        paid=round(sum(float(x.get("amount",0)) for x in paid_rows),2); remaining=round(max(0,expected-paid),2)
+        paid=round(float(paid_by_share.get(str(share["_id"]),0))+float(paid_by_no.get(int(share["share_no"]),0) if str(share["_id"]) not in paid_by_share else 0),2)
+        remaining=round(max(0,expected-paid),2)
         out.append({"share_id":str(share["_id"]),"share_no":int(share["share_no"]),"expected_amount":expected,"paid_amount":paid,"remaining_amount":remaining,"status":"paid" if remaining<=0.009 else ("partial" if paid>0 else "pending")})
     return {"member_id":member_id,"period":period,"kist_per_share":expected,"shares":out,"expected_total":round(expected*len(shares),2),"paid_total":round(sum(x["paid_amount"] for x in out),2),"remaining_total":round(sum(x["remaining_amount"] for x in out),2)}
 
@@ -356,16 +437,30 @@ async def monthly_kist_bulk_status(tenant_id: str, period: str, user=Depends(adm
     start=datetime(y,m,1,tzinfo=timezone.utc); end=datetime(y+1,1,1,tzinfo=timezone.utc) if m==12 else datetime(y,m+1,1,tzinfo=timezone.utc)
     expected=float(tenant.get("kist_per_share",500))
     members=await db.members.find({"tenant_id":tenant_id,"active":True}).sort("first_name",1).to_list(5000)
+    member_ids=[str(m["_id"]) for m in members]
+    shares=await db.shares.find({"tenant_id":tenant_id,"member_id":{"$in":member_ids},"status":"active"}).sort("share_no",1).to_list(20000) if member_ids else []
+    shares_by_member={mid:[] for mid in member_ids}
+    for sh in shares: shares_by_member.setdefault(str(sh["member_id"]),[]).append(sh)
+    for member in members:
+        mid=str(member["_id"]); expected_count=max(1,int(member.get("shares",1) or 1))
+        if len(shares_by_member.get(mid,[]))<expected_count: shares_by_member[mid]=await ensure_member_shares(member)
+    tx_rows=await db.transactions.aggregate([
+        {"$match":{"tenant_id":tenant_id,"type":"contribution","$or":[{"payment_category":"monthly_kist"},{"payment_category":{"$exists":False}}],"date":{"$gte":start,"$lt":end}}},
+        {"$group":{"_id":{"member_id":"$member_id","share_id":"$share_id","share_no":"$share_no"},"paid":{"$sum":{"$convert":{"input":{"$ifNull":["$amount",0]},"to":"double","onError":0,"onNull":0}}}}}
+    ]).to_list(None)
+    paid_by_share={}; paid_by_legacy={}
+    for x in tx_rows:
+        key=x.get("_id") or {}; paid=float(x.get("paid",0) or 0); sid=key.get("share_id")
+        if sid: paid_by_share[str(sid)]=paid
+        elif key.get("member_id") is not None and key.get("share_no") is not None: paid_by_legacy[(str(key["member_id"]),int(key["share_no"]))]=paid
     out=[]
     for member in members:
-        shares=await ensure_member_shares(member)
-        txs=await db.transactions.find({"tenant_id":tenant_id,"member_id":str(member["_id"]),"type":"contribution","$or":[{"payment_category":"monthly_kist"},{"payment_category":{"$exists":False}}],"date":{"$gte":start,"$lt":end}}).to_list(1000)
         rows=[]
-        for sh in shares:
-            paid=round(sum(float(x.get("amount",0)) for x in txs if str(x.get("share_id") or "") == str(sh["_id"]) or (not x.get("share_id") and int(x.get("share_no",0))==int(sh["share_no"]))),2)
+        for sh in shares_by_member.get(str(member["_id"]),[]):
+            paid=round(float(paid_by_share.get(str(sh["_id"]),0))+float(paid_by_legacy.get((str(member["_id"]),int(sh["share_no"])),0)),2)
             remaining=round(max(0,expected-paid),2)
             rows.append({"share_id":str(sh["_id"]),"share_no":int(sh["share_no"]),"expected_amount":expected,"paid_amount":paid,"remaining_amount":remaining,"status":"paid" if remaining<=0.009 else ("partial" if paid>0 else "pending")})
-        out.append({"member_id":str(member["_id"]),"name":f"{member.get('first_name','')} {member.get('last_name','')}".strip(),"phone":member.get("phone",""),"shares":rows,"expected_total":round(expected*len(rows),2),"paid_total":round(sum(x["paid_amount"] for x in rows),2),"remaining_total":round(sum(x["remaining_amount"] for x in rows),2)})
+        out.append({"member_id":str(member["_id"]),"name":f'{member.get("first_name","")} {member.get("last_name","")}'.strip(),"phone":member.get("phone",""),"shares":rows,"expected_total":round(expected*len(rows),2),"paid_total":round(sum(x["paid_amount"] for x in rows),2),"remaining_total":round(sum(x["remaining_amount"] for x in rows),2)})
     return {"period":period,"kist_per_share":expected,"members":out}
 
 @router.post("/{tenant_id}/monthly-kist-bulk")
@@ -446,6 +541,39 @@ async def group_activity(tenant_id:str,user=Depends(current_user)):
         rows.append({"kind":"expense","type":"Expense","amount":-float(x.get("amount",0) or 0),"account":x.get("account","cash"),"date":str(x.get("date",x.get("created_at",""))),"created_at":str(x.get("created_at",x.get("date",""))),"note":x.get("category","")})
     return sorted(rows,key=lambda x:(x.get("created_at") or x.get("date") or ""),reverse=True)[:50]
 
+@router.get("/{tenant_id}/admin-overview")
+async def admin_overview(tenant_id:str,user=Depends(admin_user)):
+    await tenant_guard(user,tenant_id)
+    member_rows, loan_rows, expense_rows, category_rows, request_rows, audit_rows = await asyncio.gather(
+        members(tenant_id,user=user), loans(tenant_id,user=user), expenses(tenant_id,user=user), expense_categories(tenant_id,user=user), loan_requests(tenant_id,user=user), audit_logs(tenant_id,user=user)
+    )
+    return {"members":member_rows,"loans":loan_rows,"expenses":expense_rows,"categories":category_rows,"requests":request_rows,"audit":audit_rows}
+
+@router.get("/{tenant_id}/register-overview")
+async def register_overview(tenant_id:str,user=Depends(current_user)):
+    await tenant_guard(user,tenant_id)
+    summary_row, tx_rows, member_rows = await asyncio.gather(tenant_summary(tenant_id, str(user.get("member_id")) if user.get("role") in ("member","group_admin") else None), transactions(tenant_id,user=user), members(tenant_id,user=user))
+    return {"summary":summary_row,"transactions":tx_rows,"members":member_rows}
+
+@router.get("/{tenant_id}/ledger-overview")
+async def ledger_overview(tenant_id:str,user=Depends(current_user)):
+    await tenant_guard(user,tenant_id)
+    member_rows, tx_rows, loan_rows = await asyncio.gather(members(tenant_id,user=user), transactions(tenant_id,user=user), loans(tenant_id,user=user))
+    return {"members":member_rows,"transactions":tx_rows,"loans":loan_rows}
+
+@router.get("/{tenant_id}/loans-overview")
+async def loans_overview(tenant_id:str,user=Depends(current_user)):
+    await tenant_guard(user,tenant_id)
+    loan_rows, request_rows, member_rows = await asyncio.gather(group_loans(tenant_id,user=user), loan_requests(tenant_id,user=user), members(tenant_id,user=user))
+    return {"loans":loan_rows,"requests":request_rows,"members":member_rows}
+
+@router.get("/{tenant_id}/personal-loan-overview")
+async def personal_loan_overview(tenant_id:str,user=Depends(current_user)):
+    await tenant_guard(user,tenant_id)
+    if not user.get("member_id"): return {"loans":[],"requests":[]}
+    loan_rows, request_rows = await asyncio.gather(loans(tenant_id,str(user["member_id"]),user=user), loan_requests(tenant_id,user=user))
+    return {"loans":loan_rows,"requests":request_rows}
+
 @router.get("/{tenant_id}/transactions")
 async def transactions(tenant_id:str,from_date:date|None=None,to_date:date|None=None,typ:str|None=None,user=Depends(current_user)):
     await tenant_guard(user,tenant_id); q={"tenant_id":tenant_id}
@@ -461,15 +589,7 @@ async def transactions(tenant_id:str,from_date:date|None=None,to_date:date|None=
         q["date"]={};
         if from_date:q["date"]["$gte"]=datetime.combine(from_date,datetime.min.time(),tzinfo=timezone.utc)
         if to_date:q["date"]["$lte"]=datetime.combine(to_date,datetime.max.time(),tzinfo=timezone.utc)
-    rows=await get_db().transactions.find(q).sort("date",-1).to_list(5000)
-    out=[]
-    for r in rows:
-        x=serialize(r)
-        if user["role"]=="member":
-            if x.get("type")=="loan_disbursement": x["amount"]=abs(float(x.get("amount",0) or 0))
-            elif x.get("type")=="loan_repayment": x["amount"]=-abs(float(x.get("amount",0) or 0))
-        out.append(x)
-    return out
+    rows=await get_db().transactions.find(q).sort("date",-1).to_list(5000); return [serialize(x) for x in rows]
 
 @router.post("/{tenant_id}/loans")
 async def create_loan(tenant_id:str,body:LoanCreate,user=Depends(admin_user)):
@@ -491,15 +611,17 @@ async def loans(tenant_id:str,member_id:str|None=None,user=Depends(current_user)
 async def group_loans(tenant_id:str,user=Depends(current_user)):
     await tenant_guard(user,tenant_id); db=get_db()
     rows=await db.loans.find({"tenant_id":tenant_id,"status":"active"}).sort("created_at",-1).to_list(5000)
-    ids=[]
+    member_ids=[]
     for r in rows:
-        try: ids.append(parse_oid(str(r.get("member_id"))))
+        try: member_ids.append(parse_oid(str(r.get("member_id"))))
         except Exception: pass
-    member_rows=await db.members.find({"tenant_id":tenant_id,"_id":{"$in":[x for x in ids if x]}} ,{"first_name":1,"last_name":1}).to_list(len(ids) or 1)
-    members={str(m["_id"]):m for m in member_rows}
+    member_ids=[x for x in member_ids if x]
+    member_rows=await db.members.find({"tenant_id":tenant_id,"_id":{"$in":member_ids}}).to_list(len(member_ids) or 1)
+    members_by_id={str(m["_id"]):m for m in member_rows}
     out=[]
     for r in rows:
-        m=members.get(str(r.get("member_id"))); x=serialize(r); x["member_name"]=f'{m.get("first_name","")} {m.get("last_name","")}'.strip() if m else "Member"; out.append(x)
+        m=members_by_id.get(str(r.get("member_id")))
+        x=serialize(r); x["member_name"]=f'{m.get("first_name","")} {m.get("last_name","")}'.strip() if m else "Member"; out.append(x)
     return out
 
 @router.post("/{tenant_id}/loan-payments")
@@ -530,8 +652,7 @@ async def loan_request(tenant_id:str,body:LoanRequestCreate,user=Depends(current
     await tenant_guard(user,tenant_id)
     if user["role"] not in ("member","group_admin"): raise HTTPException(403,"Only group members can request an advance loan")
     doc={"tenant_id":tenant_id,"member_id":str(user.get("member_id")),"amount":body.amount,"purpose":body.purpose,"status":"pending","created_at":datetime.now(timezone.utc)}
-    r=await get_db().loan_requests.insert_one(doc)
-    await audit(tenant_id,user,"LOAN_REQUESTED","loan_request",str(r.inserted_id),{"amount":body.amount}); return {"id":str(r.inserted_id)}
+    r=await get_db().loan_requests.insert_one(doc); await audit(tenant_id,user,"LOAN_REQUESTED","loan_request",str(r.inserted_id),{"amount":body.amount}); await _create_notification(tenant_id,role="admin",source_key=f"loan-request:{r.inserted_id}",title="New loan request",body=f"A member has requested ₹{float(body.amount):,.2f}.",created_at=doc["created_at"]); return {"id":str(r.inserted_id)}
 
 @router.get("/{tenant_id}/loan-requests")
 async def loan_requests(tenant_id:str,user=Depends(current_user)):
@@ -554,15 +675,17 @@ async def decide_loan_request(tenant_id:str,request_id:str,body:LoanRequestDecis
 
 async def ensure_expense_allocations(tenant_id:str,expense_doc):
     db=get_db()
-    if await db.transactions.find_one({"tenant_id":tenant_id,"expense_id":str(expense_doc["_id"]),"type":"expense_allocation"}):
-        return
     shares=await db.shares.find({"tenant_id":tenant_id,"status":"active"}).sort("share_no",1).to_list(10000)
     if not shares: return
+    existing_count=await db.transactions.count_documents({"tenant_id":tenant_id,"expense_id":str(expense_doc["_id"]),"type":"expense_allocation"})
+    if existing_count>=len(shares): return
     total=float(expense_doc.get("amount",0) or 0); per=round(total/len(shares),2); allocated=0.0
+    from pymongo import UpdateOne
+    ops=[]
     for i,share in enumerate(shares):
         amount=round(total-allocated,2) if i==len(shares)-1 else per
         allocated=round(allocated+amount,2)
-        await db.transactions.update_one(
+        ops.append(UpdateOne(
             {"tenant_id":tenant_id,"expense_id":str(expense_doc["_id"]),"share_id":str(share["_id"]),"type":"expense_allocation"},
             {"$setOnInsert":{
                 "tenant_id":tenant_id,"member_id":str(share["member_id"]),"share_id":str(share["_id"]),
@@ -570,7 +693,8 @@ async def ensure_expense_allocations(tenant_id:str,expense_doc):
                 "amount":-amount,"account":expense_doc.get("account","cash"),"date":expense_doc.get("date"),
                 "created_at":expense_doc.get("created_at",datetime.now(timezone.utc)),
                 "payment_category":"group_expense_allocation","note":expense_doc.get("category", "Group expense")
-            }},upsert=True)
+            }},upsert=True))
+    if ops: await db.transactions.bulk_write(ops,ordered=False)
 
 @router.post("/{tenant_id}/expenses")
 async def expense(tenant_id:str,body:ExpenseCreate,user=Depends(admin_user)):
@@ -580,7 +704,9 @@ async def expense(tenant_id:str,body:ExpenseCreate,user=Depends(admin_user)):
     r=await db.expenses.insert_one({**body.model_dump(),"tenant_id":tenant_id,"date":dt,"created_at":now,"proof_url":None,"proof_public_id":None})
     created=await db.expenses.find_one({"_id":r.inserted_id})
     await ensure_expense_allocations(tenant_id,created)
-    await audit(tenant_id,user,"EXPENSE_CREATED","expense",str(r.inserted_id),{"amount":body.amount}); return {"id":str(r.inserted_id)}
+    await audit(tenant_id,user,"EXPENSE_CREATED","expense",str(r.inserted_id),{"amount":body.amount})
+    await _create_notification(tenant_id,role="admin",source_key=f"expense:{r.inserted_id}",title="Group expense recorded",body=f"{body.category}: ₹{float(body.amount):,.2f}.",created_at=now)
+    return {"id":str(r.inserted_id)}
 
 @router.get("/{tenant_id}/expenses")
 async def expenses(tenant_id:str,user=Depends(admin_user)):
@@ -628,19 +754,13 @@ async def passbook(tenant_id:str,member_id:str,from_date:date|None=None,to_date:
         if from_date:q["date"]["$gte"]=datetime.combine(from_date,datetime.min.time(),tzinfo=timezone.utc)
         if to_date:q["date"]["$lte"]=datetime.combine(to_date,datetime.max.time(),tzinfo=timezone.utc)
     if share_no:q["share_no"]=share_no
-    rows=await get_db().transactions.find(q).sort([("date",1),("created_at",1)]).to_list(10000)
-    balance=0.0; out=[]
+    # Expense allocations are created when an expense is posted. Never perform
+    # a tenant-wide backfill from a read endpoint: older code turned every
+    # passbook open into N+1 MongoDB writes. A one-time deployment backfill (if
+    # needed) is handled separately; normal reads stay strictly read-only.
+    rows=await get_db().transactions.find(q).sort("date",1).to_list(10000); balance=0; out=[]
     for r in rows:
-        x=serialize(r)
-        amount=float(x.get("amount",0) or 0)
-        # Stored transaction signs are group-ledger signs. A personal passbook
-        # must show money from the member's perspective: loan disbursement is a
-        # credit received; loan repayment is a debit paid.
-        if x.get("type")=="loan_disbursement": amount=abs(amount)
-        elif x.get("type")=="loan_repayment": amount=-abs(amount)
-        x["amount"]=round(amount,2)
-        balance+=amount
-        x["running_balance"]=round(balance,2); out.append(x)
+        balance+=float(r.get("amount",0)); x=serialize(r); x["running_balance"]=round(balance,2); out.append(x)
     return out
 
 @router.get("/{tenant_id}/audit")

@@ -12,6 +12,11 @@ const BASE = (isPrivateHost && (!envBase || envIsLocalhost))
   : (envBase || `${protocol}//${host}/api`);
 
 const inFlight = new Map<string, Promise<unknown>>();
+type CacheEntry={expiresAt:number;value:unknown};
+const getCache = new Map<string,CacheEntry>();
+const GET_TTL_MS = 15000;
+
+export function invalidateApiCache(){ getCache.clear(); }
 
 async function request<T>(path:string,options:RequestInit={}):Promise<T>{
   const token=localStorage.getItem('bb-token');
@@ -22,21 +27,25 @@ async function request<T>(path:string,options:RequestInit={}):Promise<T>{
 
   const url=`${BASE}${path}`;
   const key=method==='GET' ? `${url}|${token||''}` : '';
-  // GET requests are de-duplicated while in flight; mutations always execute once.
-  if(key && inFlight.has(key)) return inFlight.get(key) as Promise<T>;
+  if(key){
+    const cached=getCache.get(key);
+    if(cached && cached.expiresAt>Date.now()) return cached.value as T;
+    if(cached) getCache.delete(key);
+    if(inFlight.has(key)) return inFlight.get(key) as Promise<T>;
+  }
 
   const run=(async()=>{
     try{
       const res=await fetch(url,{...options,headers});
       if(!res.ok){
         const b=await res.json().catch(()=>({}));
-        if(res.status===401){
-          localStorage.removeItem('bb-token');
-          localStorage.removeItem('bb-user');
-        }
+        if(res.status===401){ localStorage.removeItem('bb-token'); localStorage.removeItem('bb-user'); invalidateApiCache(); }
         throw new Error(b.detail||`Request failed: ${res.status}`);
       }
-      return await res.json() as T;
+      const value=await res.json() as T;
+      if(key) getCache.set(key,{expiresAt:Date.now()+GET_TTL_MS,value});
+      else invalidateApiCache();
+      return value;
     }catch(error:any){
       if(error instanceof TypeError) throw new Error('Network request failed');
       throw error;
@@ -66,18 +75,24 @@ export const api={
  createAdmin:(body:any)=>request<any>('/super-admin/admins',{method:'POST',body:JSON.stringify(body)}),
  adminStatus:(id:string,active:boolean)=>request<any>(`/super-admin/users/${id}/status`,{method:'PATCH',body:JSON.stringify({active})}),
  resetUserPassword:(id:string,password:string)=>request<any>(`/super-admin/users/${id}/reset-password`,{method:'POST',body:JSON.stringify({password})}),
+ dashboard:(id:string)=>request<any>(`/group/${id}/dashboard`),
+ adminOverview:(id:string)=>request<any>(`/group/${id}/admin-overview`),
  summary:(id:string,memberId?:string)=>request<any>(`/group/${id}/summary${memberId?`?member_id=${encodeURIComponent(memberId)}`:''}`),
  tenant:(id:string)=>request<Tenant>(`/group/${id}`),
  analytics:(id:string,months?:number,shareNo?:number,memberId?:string)=>{const q=new URLSearchParams();if(months!==undefined)q.set('months',String(months));if(shareNo!==undefined)q.set('share_no',String(shareNo));if(memberId)q.set('member_id',memberId);const qs=q.toString();return request<any[]>(`/group/${id}/analytics${qs?`?${qs}`:''}`)},
  members:(id:string)=>request<Member[]>(`/group/${id}/members`),
- member:(tid:string,mid:string)=>request<Member>(`/group/${tid}/members/${mid}`),
  memberShares:(tid:string,mid:string)=>request<import('./types').Share[]>(`/group/${tid}/members/${mid}/shares`),
+ memberDetails:(tid:string,mid:string)=>request<any>(`/group/${tid}/members/${mid}/details`),
  addMember:(id:string,b:any)=>request<any>(`/group/${id}/members`,{method:'POST',body:JSON.stringify(b)}),
  updateMember:(tid:string,mid:string,b:any)=>request<any>(`/group/${tid}/members/${mid}`,{method:'PATCH',body:JSON.stringify(b)}),
  memberStatus:(tid:string,mid:string,active:boolean)=>request<any>(`/group/${tid}/members/${mid}/status`,{method:'PATCH',body:JSON.stringify({active})}),
  resetMemberPassword:(tid:string,mid:string,password:string)=>request<any>(`/group/${tid}/members/${mid}/reset-password`,{method:'POST',body:JSON.stringify({password})}),
  uploadMemberProfileImage:(tid:string,mid:string,file:File)=>{const fd=new FormData();fd.append('file',file);return request<any>(`/group/${tid}/members/${mid}/profile-image`,{method:'POST',body:fd})},
  deleteMemberProfileImage:(tid:string,mid:string)=>request<any>(`/group/${tid}/members/${mid}/profile-image`,{method:'DELETE'}),
+ registerOverview:(tid:string)=>request<any>(`/group/${tid}/register-overview`),
+ ledgerOverview:(tid:string)=>request<any>(`/group/${tid}/ledger-overview`),
+ loansOverview:(tid:string)=>request<any>(`/group/${tid}/loans-overview`),
+ personalLoanOverview:(tid:string)=>request<any>(`/group/${tid}/personal-loan-overview`),
  transactions:(tid:string,params='')=>request<Transaction[]>(`/group/${tid}/transactions${params}`),
  groupActivity:(tid:string)=>request<any[]>(`/group/${tid}/activity`),
  contributions:(tid:string,b:any)=>request<any>(`/group/${tid}/contributions`,{method:'POST',body:JSON.stringify(b)}),
@@ -107,7 +122,6 @@ export const api={
  monthlyKistReceiptUrl:(tid:string,id:string,period:string)=>`${BASE}/reports/monthly-kist/${tid}/${id}/${encodeURIComponent(period)}`,
  notifications:(tid:string)=>request<any[]>(`/group/${tid}/notifications`),
  markNotificationRead:(tid:string,id:string)=>request<any>(`/group/${tid}/notifications/${id}/read`,{method:'PATCH'}),
- markNotificationsReadBatch:(tid:string,ids:string[])=>request<any>(`/group/${tid}/notifications/read-batch`,{method:'POST',body:JSON.stringify({ids})}),
   clearNotifications:(tid:string,ids:string[])=>request<any>(`/group/${tid}/notifications/clear`,{method:'POST',body:JSON.stringify({ids})}),
  deleteNotification:(tid:string,id:string)=>request<any>(`/group/${tid}/notifications/${id}`,{method:'DELETE'}),
  fetchBlob:async(url:string)=>{const token=localStorage.getItem('bb-token');const r=await fetch(url,{headers:{Authorization:`Bearer ${token}`}});if(!r.ok)throw new Error('Unable to generate PDF');return r.blob()},

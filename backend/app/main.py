@@ -1,8 +1,9 @@
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from .db import connect_db, close_db, get_db
+from .services import backfill_legacy_expense_allocations
 from .core.config import settings
 from .core.security import hash_password
 from .api import auth, super_admin, group, reports
@@ -23,10 +24,22 @@ async def lifespan(app: FastAPI):
             "password_changed_at": datetime.now(timezone.utc),
             "created_at": datetime.now(timezone.utc),
         })
+    import asyncio
+    asyncio.create_task(backfill_legacy_expense_allocations())
     yield
     await close_db()
 
 app = FastAPI(title="Bharat Bachat API", version="1.0.0", lifespan=lifespan)
+
+@app.middleware("http")
+async def request_timing(request: Request, call_next):
+    started = __import__("time").perf_counter()
+    response = await call_next(request)
+    elapsed_ms = (__import__("time").perf_counter() - started) * 1000
+    response.headers["X-Process-Time-Ms"] = f"{elapsed_ms:.0f}"
+    if elapsed_ms >= 1000:
+        print(f"[slow-api] {request.method} {request.url.path} {elapsed_ms:.0f}ms", flush=True)
+    return response
 origins = [x.strip().rstrip("/") for x in settings.cors_origins.split(",") if x.strip()]
 # Keep production origins explicit. Do not use `*` because JWT-bearing requests use credentials.
 

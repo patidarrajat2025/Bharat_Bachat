@@ -20,7 +20,10 @@ async def current_user_raw(credentials: HTTPAuthorizationCredentials=Depends(bea
             if abs(float(token_changed)-ts)>1.0: raise HTTPException(status_code=401,detail="Session expired. Please login again.")
         except HTTPException: raise
         except Exception: pass
-    if user.get("role")=="group_admin":
+    # Group-admin member records are created/normalized during login. Do not
+    # perform an upsert/share reconciliation on every authenticated API call.
+    # Only legacy sessions missing member_id need the compatibility repair.
+    if user.get("role")=="group_admin" and not user.get("member_id"):
         await ensure_group_admin_member(user)
     return user
 async def current_user(user=Depends(current_user_raw)):

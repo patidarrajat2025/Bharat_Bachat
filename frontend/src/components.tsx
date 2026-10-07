@@ -95,7 +95,7 @@ export function Layout({children}:{children:ReactNode}){
   const [settings,setSettings]=useState(false);
   const [unread,setUnread]=useState(0);
   const [notifications,setNotifications]=useState<any[]>([]); const [notifOpen,setNotifOpen]=useState(false); const [toast,setToast]=useState('');
-  const refreshNotifications=async(openTray=false)=>{if(!user?.tenant_id)return;try{const rows=await api.notifications(user.tenant_id);const unreadRows=rows.filter((n:any)=>!n.read);setUnread(unreadRows.length);setNotifications(rows);if(openTray&&unreadRows.length){await api.markNotificationsReadBatch(user.tenant_id,unreadRows.map((n:any)=>n._id)).catch(()=>null);setNotifications(rows.map((n:any)=>({...n,read:true})));setUnread(0)}}catch{}};
+  const refreshNotifications=async(openTray=false)=>{if(!user?.tenant_id)return;try{const rows=await api.notifications(user.tenant_id);const unreadRows=rows.filter((n:any)=>!n.read);setUnread(unreadRows.length);setNotifications(rows);if(openTray&&unreadRows.length){await Promise.all(unreadRows.map((n:any)=>api.markNotificationRead(user.tenant_id!,n._id).catch(()=>null)));setNotifications(rows.map((n:any)=>({...n,read:true})));setUnread(0)}}catch{}};
   const closeNotifications=async()=>{setNotifOpen(false);if(!user?.tenant_id||!notifications.length)return;const ids=notifications.map((n:any)=>n._id).filter(Boolean);try{await api.clearNotifications(user.tenant_id,ids);setNotifications([]);setUnread(0)}catch{}};
   const allowed=user?.role==='member'
     ? ['/dashboard','/analytics','/passbook','/loans','/personal-loan']
