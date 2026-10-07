@@ -87,7 +87,7 @@ const mobileLabel=(key:string)=>({dashboard:'Home',members:'Members',register:'C
 
 export function Layout({children}:{children:ReactNode}){
   const {t}=useTranslation();
-  const {user,tenant,logout,setAuth}=useStore();
+  const {user,tenant,logout}=useStore();
   const loc=useLocation();
   const [more,setMore]=useState(false);
   const [profile,setProfile]=useState(false);
@@ -95,7 +95,7 @@ export function Layout({children}:{children:ReactNode}){
   const [settings,setSettings]=useState(false);
   const [unread,setUnread]=useState(0);
   const [notifications,setNotifications]=useState<any[]>([]); const [notifOpen,setNotifOpen]=useState(false); const [toast,setToast]=useState('');
-  const refreshNotifications=async(openTray=false)=>{if(!user?.tenant_id)return;try{const rows=await api.notifications(user.tenant_id);const unreadRows=rows.filter((n:any)=>!n.read);setUnread(unreadRows.length);setNotifications(rows);if(openTray&&unreadRows.length){await Promise.all(unreadRows.map((n:any)=>api.markNotificationRead(user.tenant_id!,n._id).catch(()=>null)));setNotifications(rows.map((n:any)=>({...n,read:true})));setUnread(0)}}catch{}};
+  const refreshNotifications=async(openTray=false)=>{if(!user?.tenant_id)return;try{const rows=await api.notifications(user.tenant_id);const unreadRows=rows.filter((n:any)=>!n.read);setUnread(unreadRows.length);setNotifications(rows);if(openTray&&unreadRows.length){await api.markNotificationsReadBatch(user.tenant_id,unreadRows.map((n:any)=>n._id)).catch(()=>null);setNotifications(rows.map((n:any)=>({...n,read:true})));setUnread(0)}}catch{}};
   const closeNotifications=async()=>{setNotifOpen(false);if(!user?.tenant_id||!notifications.length)return;const ids=notifications.map((n:any)=>n._id).filter(Boolean);try{await api.clearNotifications(user.tenant_id,ids);setNotifications([]);setUnread(0)}catch{}};
   const allowed=user?.role==='member'
     ? ['/dashboard','/analytics','/passbook','/loans','/personal-loan']
@@ -115,7 +115,6 @@ export function Layout({children}:{children:ReactNode}){
     return()=>document.removeEventListener('pointerdown',close,true);
   },[profile]);
   useEffect(()=>{void refreshNotifications(false)},[user?.tenant_id]);
-  useEffect(()=>{if(!user)return;void api.me().then(u=>{const st=useStore.getState();if(st.token) setAuth(st.token,u);if(u.tenant_id) return api.tenant(u.tenant_id).then(g=>st.setTenant(g)).catch(()=>null);return null}).catch(()=>null)},[user?.id]);
 
   return <div className="app-shell" data-route={loc.pathname}><InstallBanner/>
     <header className="app-header safe-top">

@@ -1,4 +1,5 @@
 from datetime import datetime, timezone, date
+import asyncio
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from ..db import get_db
 from ..deps import current_user, tenant_guard, require_roles, parse_oid
@@ -78,32 +79,17 @@ async def get_analytics(tenant_id:str,months:int=12,share_no:int|None=None,membe
 @router.get("/{tenant_id}/notifications")
 async def notifications(tenant_id:str,user=Depends(current_user)):
     await tenant_guard(user,tenant_id)
-    db=get_db(); now=datetime.now(timezone.utc)
+    db=get_db()
+    if user["role"] in ("group_admin","super_admin"):
+        q={"tenant_id":tenant_id,"recipient_role":"admin","dismissed":{"$ne":True}}
+    else:
+        mid=str(user.get("member_id") or "")
+        if not mid: return []
+        q={"tenant_id":tenant_id,"recipient_role":"member","recipient_member_id":mid,"dismissed":{"$ne":True}}
     try:
-        if user["role"] in ("group_admin","super_admin"):
-            pending=await db.loan_requests.find({"tenant_id":tenant_id,"status":"pending"}).sort("created_at",-1).to_list(20)
-            for r in pending:
-                key=f"loan-request:{r['_id']}"
-                await db.notifications.update_one({"tenant_id":tenant_id,"source_key":key},{"$setOnInsert":{"tenant_id":tenant_id,"recipient_role":"admin","type":"loan_request","title":"New loan request","body":f"A member has requested ₹{float(r.get('amount',0)):,.2f}.","read":False,"created_at":r.get("created_at",now),"source_key":key}},upsert=True)
-            logs=await db.audit_logs.find({"tenant_id":tenant_id}).sort("created_at",-1).limit(10).to_list(10)
-            for l in logs:
-                key=f"audit:{l['_id']}"
-                await db.notifications.update_one({"tenant_id":tenant_id,"source_key":key},{"$setOnInsert":{"tenant_id":tenant_id,"recipient_role":"admin","type":"activity","title":str(l.get("action","Activity")).replace("_"," ").title(),"body":"New group activity recorded.","read":False,"created_at":l.get("created_at",now),"source_key":key}},upsert=True)
-            q={"tenant_id":tenant_id,"recipient_role":"admin","dismissed":{"$ne":True}}
-        else:
-            mid=str(user.get("member_id") or "")
-            if not mid: return []
-            try: member_oid=parse_oid(mid)
-            except HTTPException: return []
-            recent=await db.transactions.find({"tenant_id":tenant_id,"member_id":member_oid}).sort("date",-1).limit(10).to_list(10)
-            for t in recent:
-                key=f"tx:{t['_id']}:{mid}"
-                await db.notifications.update_one({"tenant_id":tenant_id,"source_key":key},{"$setOnInsert":{"tenant_id":tenant_id,"source_key":key,"recipient_role":"member","recipient_member_id":mid,"type":"transaction","title":"Account activity","body":f"{str(t.get('type','Transaction')).replace('_',' ').title()} ₹{float(t.get('amount',0)):,.2f}.","read":False,"created_at":t.get("date",now)}},upsert=True)
-            q={"tenant_id":tenant_id,"recipient_role":"member","recipient_member_id":mid,"dismissed":{"$ne":True}}
-        rows=await db.notifications.find(q).sort("created_at",-1).limit(20).to_list(20)
+        rows=await db.notifications.find(q).sort("created_at",-1).limit(30).to_list(30)
         return [serialize(x) for x in rows]
     except Exception:
-        # Notification delivery is non-critical. A malformed legacy record must never break the dashboard.
         return []
 
 @router.post("/{tenant_id}/notifications/clear")
@@ -129,6 +115,21 @@ async def clear_notifications(tenant_id:str,body:dict,user=Depends(current_user)
         result=await db.notifications.update_many(q,{"$set":{"dismissed":True,"dismissed_at":datetime.now(timezone.utc)}})
         return {"ok":True,"count":result.modified_count}
     return {"ok":True,"count":0}
+
+@router.post("/{tenant_id}/notifications/read-batch")
+async def mark_notifications_read_batch(tenant_id:str,body:dict,user=Depends(current_user)):
+    await tenant_guard(user,tenant_id); db=get_db()
+    ids=[str(x) for x in (body.get("ids") or []) if str(x)]
+    from bson import ObjectId
+    valid=[]
+    for x in ids:
+        try: valid.append(ObjectId(x))
+        except Exception: pass
+    if not valid: return {"ok":True,"count":0}
+    q={"_id":{"$in":valid},"tenant_id":tenant_id}
+    if user["role"]=="member": q["recipient_member_id"]=str(user.get("member_id") or "")
+    result=await db.notifications.update_many(q,{"$set":{"read":True}})
+    return {"ok":True,"count":result.modified_count}
 
 @router.delete("/{tenant_id}/notifications/batch")
 async def delete_notifications_batch(tenant_id:str,body:dict,user=Depends(current_user)):
@@ -207,6 +208,13 @@ async def update_member(tenant_id:str,member_id:str,body:MemberUpdate,user=Depen
     await db.users.update_one({"member_id":member_id,"tenant_id":parse_oid(tenant_id)},{"$set":{"name":f"{body.first_name} {body.last_name}".strip(),"email":body.email,"phone":m["phone"]}})
     await audit(tenant_id,user,"MEMBER_UPDATED","member",member_id,{"shares":body.shares}); return {"ok":True}
 
+@router.get("/{tenant_id}/members/{member_id}")
+async def member_detail(tenant_id:str,member_id:str,user=Depends(current_user)):
+    await tenant_guard(user,tenant_id)
+    if user["role"]=="member" and str(user.get("member_id"))!=member_id:
+        raise HTTPException(403,"Member access denied")
+    return serialize(await get_member(get_db(),tenant_id,member_id))
+
 @router.get("/{tenant_id}/members/{member_id}/shares")
 async def member_shares(tenant_id:str,member_id:str,user=Depends(current_user)):
     await tenant_guard(user,tenant_id)
@@ -266,7 +274,19 @@ async def ensure_share(member,share_no):
 
 async def insert_tx(tenant_id,member_id,typ,amount,account,user,**extra):
     db=get_db(); now=datetime.now(timezone.utc); doc={"tenant_id":tenant_id,"member_id":member_id,"type":typ,"amount":amount,"account":account,"created_at":now,**extra}
-    r=await db.transactions.insert_one(doc); await audit(tenant_id,user,f"{typ.upper()}_POSTED","transaction",str(r.inserted_id),{"amount":amount}); return str(r.inserted_id)
+    r=await db.transactions.insert_one(doc)
+    if member_id:
+        key=f"tx:{r.inserted_id}:{member_id}"
+        try:
+            await db.notifications.update_one(
+                {"tenant_id":tenant_id,"source_key":key},
+                {"$setOnInsert": {"tenant_id":tenant_id,"source_key":key,"recipient_role":"member","recipient_member_id":str(member_id),"type":"transaction","title":"Account activity","body":f"{str(typ).replace('_',' ').title()} ₹{abs(float(amount or 0)):,.2f}.","read":False,"created_at":extra.get("date",now)}},
+                upsert=True
+            )
+        except Exception:
+            pass
+    await audit(tenant_id,user,f"{typ.upper()}_POSTED","transaction",str(r.inserted_id),{"amount":amount})
+    return str(r.inserted_id)
 
 @router.post("/{tenant_id}/contributions")
 async def contribution(tenant_id:str,body:ContributionCreate,user=Depends(admin_user)):
@@ -282,24 +302,29 @@ async def monthly_kist_summary(tenant_id:str,period:str,user=Depends(current_use
     y,m=map(int,period.split("-")); start=datetime(y,m,1,tzinfo=timezone.utc); end=datetime(y+1,1,1,tzinfo=timezone.utc) if m==12 else datetime(y,m+1,1,tzinfo=timezone.utc)
     tenant=await db.tenants.find_one({"_id":parse_oid(tenant_id)})
     expected_per_share=float((tenant or {}).get("kist_per_share",500))
-    members=await db.members.find({"tenant_id":tenant_id,"active":True}).to_list(5000)
+    members=await db.members.find({"tenant_id":tenant_id,"active":True},{"first_name":1,"last_name":1,"phone":1,"shares":1}).to_list(5000)
     if user["role"]=="member": members=[m for m in members if str(m["_id"])==str(user.get("member_id"))]
-    tx_rows=await db.transactions.find({"tenant_id":tenant_id,"type":"contribution","$or":[{"payment_category":"monthly_kist"},{"payment_category":{"$exists":False}}],"date":{"$gte":start,"$lt":end}}).to_list(20000)
-    # Monthly collection status is group-level even when a member is logged in.
-    # Never use per-share/member expense allocations here; those are personal passbook rows.
-    expense_rows=await db.expenses.find({"tenant_id":tenant_id,"date":{"$gte":start,"$lt":end}}).to_list(20000)
+    tx_rows, expense_rows, share_rows = await asyncio.gather(
+        db.transactions.find({"tenant_id":tenant_id,"type":"contribution","$or":[{"payment_category":"monthly_kist"},{"payment_category":{"$exists":False}}],"date":{"$gte":start,"$lt":end}}, {"member_id":1,"share_id":1,"share_no":1,"amount":1}).to_list(20000),
+        db.expenses.find({"tenant_id":tenant_id,"date":{"$gte":start,"$lt":end}},{"amount":1}).to_list(20000),
+        db.shares.find({"tenant_id":tenant_id,"status":"active"},{"member_id":1,"share_no":1}).sort("share_no",1).to_list(20000),
+    )
     group_expenses=round(sum(float(x.get("amount",0) or 0) for x in expense_rows),2)
     paid_by_share={}; paid_by_legacy={}
     for x in tx_rows:
-        amount=float(x.get("amount",0)); sid=x.get("share_id")
-        if sid: paid_by_share[sid]=paid_by_share.get(sid,0)+amount
+        amount=float(x.get("amount",0) or 0); sid=x.get("share_id")
+        if sid: paid_by_share[str(sid)]=paid_by_share.get(str(sid),0)+amount
         elif x.get("member_id") is not None and x.get("share_no") is not None:
             key=(str(x.get("member_id")),int(x.get("share_no"))); paid_by_legacy[key]=paid_by_legacy.get(key,0)+amount
+    shares_by_member={}
+    for sh in share_rows: shares_by_member.setdefault(str(sh["member_id"]),[]).append(sh)
     expected=paid=paid_shares=partial_shares=pending_shares=0
     for member in members:
-        shares=await ensure_member_shares(member)
+        shares=shares_by_member.get(str(member["_id"]),[])
+        # Legacy member records can predate the shares collection; do not mutate the DB from a GET.
+        if not shares: shares=[{"_id":None,"member_id":str(member["_id"]),"share_no":no} for no in range(1,int(member.get("shares",1) or 1)+1)]
         for share in shares:
-            sid=str(share["_id"]); p=float(paid_by_share.get(sid,0) + paid_by_legacy.get((str(member["_id"]),int(share["share_no"])),0)); p=round(p,2); expected+=expected_per_share; paid+=min(p,expected_per_share); remaining=max(0,round(expected_per_share-p,2))
+            sid=str(share.get("_id") or ""); p=float(paid_by_share.get(sid,0) + paid_by_legacy.get((str(member["_id"]),int(share["share_no"])),0)); p=round(p,2); expected+=expected_per_share; paid+=min(p,expected_per_share); remaining=max(0,round(expected_per_share-p,2))
             if remaining<=0.009: paid_shares+=1
             elif p>0: partial_shares+=1
             else: pending_shares+=1
@@ -436,7 +461,15 @@ async def transactions(tenant_id:str,from_date:date|None=None,to_date:date|None=
         q["date"]={};
         if from_date:q["date"]["$gte"]=datetime.combine(from_date,datetime.min.time(),tzinfo=timezone.utc)
         if to_date:q["date"]["$lte"]=datetime.combine(to_date,datetime.max.time(),tzinfo=timezone.utc)
-    rows=await get_db().transactions.find(q).sort("date",-1).to_list(5000); return [serialize(x) for x in rows]
+    rows=await get_db().transactions.find(q).sort("date",-1).to_list(5000)
+    out=[]
+    for r in rows:
+        x=serialize(r)
+        if user["role"]=="member":
+            if x.get("type")=="loan_disbursement": x["amount"]=abs(float(x.get("amount",0) or 0))
+            elif x.get("type")=="loan_repayment": x["amount"]=-abs(float(x.get("amount",0) or 0))
+        out.append(x)
+    return out
 
 @router.post("/{tenant_id}/loans")
 async def create_loan(tenant_id:str,body:LoanCreate,user=Depends(admin_user)):
@@ -456,10 +489,17 @@ async def loans(tenant_id:str,member_id:str|None=None,user=Depends(current_user)
 
 @router.get("/{tenant_id}/group-loans")
 async def group_loans(tenant_id:str,user=Depends(current_user)):
-    await tenant_guard(user,tenant_id); db=get_db(); rows=await db.loans.find({"tenant_id":tenant_id,"status":"active"}).sort("created_at",-1).to_list(5000); out=[]
+    await tenant_guard(user,tenant_id); db=get_db()
+    rows=await db.loans.find({"tenant_id":tenant_id,"status":"active"}).sort("created_at",-1).to_list(5000)
+    ids=[]
     for r in rows:
-        m=await db.members.find_one({"_id":parse_oid(r["member_id"]),"tenant_id":tenant_id})
-        x=serialize(r); x["member_name"]=f'{m.get("first_name","")} {m.get("last_name","")}'.strip() if m else "Member"; out.append(x)
+        try: ids.append(parse_oid(str(r.get("member_id"))))
+        except Exception: pass
+    member_rows=await db.members.find({"tenant_id":tenant_id,"_id":{"$in":[x for x in ids if x]}} ,{"first_name":1,"last_name":1}).to_list(len(ids) or 1)
+    members={str(m["_id"]):m for m in member_rows}
+    out=[]
+    for r in rows:
+        m=members.get(str(r.get("member_id"))); x=serialize(r); x["member_name"]=f'{m.get("first_name","")} {m.get("last_name","")}'.strip() if m else "Member"; out.append(x)
     return out
 
 @router.post("/{tenant_id}/loan-payments")
@@ -490,7 +530,8 @@ async def loan_request(tenant_id:str,body:LoanRequestCreate,user=Depends(current
     await tenant_guard(user,tenant_id)
     if user["role"] not in ("member","group_admin"): raise HTTPException(403,"Only group members can request an advance loan")
     doc={"tenant_id":tenant_id,"member_id":str(user.get("member_id")),"amount":body.amount,"purpose":body.purpose,"status":"pending","created_at":datetime.now(timezone.utc)}
-    r=await get_db().loan_requests.insert_one(doc); await audit(tenant_id,user,"LOAN_REQUESTED","loan_request",str(r.inserted_id),{"amount":body.amount}); return {"id":str(r.inserted_id)}
+    r=await get_db().loan_requests.insert_one(doc)
+    await audit(tenant_id,user,"LOAN_REQUESTED","loan_request",str(r.inserted_id),{"amount":body.amount}); return {"id":str(r.inserted_id)}
 
 @router.get("/{tenant_id}/loan-requests")
 async def loan_requests(tenant_id:str,user=Depends(current_user)):
@@ -587,14 +628,19 @@ async def passbook(tenant_id:str,member_id:str,from_date:date|None=None,to_date:
         if from_date:q["date"]["$gte"]=datetime.combine(from_date,datetime.min.time(),tzinfo=timezone.utc)
         if to_date:q["date"]["$lte"]=datetime.combine(to_date,datetime.max.time(),tzinfo=timezone.utc)
     if share_no:q["share_no"]=share_no
-    # Backfill member-visible expense allocations for older expense records so
-    # historical expenses also appear in the member passbook.
-    expenses=await get_db().expenses.find({"tenant_id":tenant_id}).to_list(10000)
-    for exp in expenses:
-        await ensure_expense_allocations(tenant_id,exp)
-    rows=await get_db().transactions.find(q).sort("date",1).to_list(10000); balance=0; out=[]
+    rows=await get_db().transactions.find(q).sort([("date",1),("created_at",1)]).to_list(10000)
+    balance=0.0; out=[]
     for r in rows:
-        balance+=float(r.get("amount",0)); x=serialize(r); x["running_balance"]=round(balance,2); out.append(x)
+        x=serialize(r)
+        amount=float(x.get("amount",0) or 0)
+        # Stored transaction signs are group-ledger signs. A personal passbook
+        # must show money from the member's perspective: loan disbursement is a
+        # credit received; loan repayment is a debit paid.
+        if x.get("type")=="loan_disbursement": amount=abs(amount)
+        elif x.get("type")=="loan_repayment": amount=-abs(amount)
+        x["amount"]=round(amount,2)
+        balance+=amount
+        x["running_balance"]=round(balance,2); out.append(x)
     return out
 
 @router.get("/{tenant_id}/audit")
