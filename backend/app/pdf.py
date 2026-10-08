@@ -2,6 +2,8 @@ from io import BytesIO
 from pathlib import Path
 from datetime import datetime
 from urllib.request import urlopen
+import asyncio
+import time
 
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_LEFT, TA_RIGHT, TA_CENTER
@@ -40,11 +42,34 @@ def _money(value):
     return f'₹ {float(value or 0):,.2f}'
 
 
-def _logo_flowable(logo_url, size=20):
+_LOGO_CACHE = {}
+_LOGO_CACHE_TTL = 15 * 60
+
+def _download_logo(logo_url):
+    try:
+        return urlopen(logo_url, timeout=2).read()
+    except Exception:
+        return None
+
+async def get_cached_logo_bytes(logo_url):
     if not logo_url:
         return None
+    now = time.monotonic()
+    hit = _LOGO_CACHE.get(logo_url)
+    if hit and hit[0] > now:
+        return hit[1]
+    data = await asyncio.to_thread(_download_logo, logo_url)
+    if data:
+        _LOGO_CACHE[logo_url] = (now + _LOGO_CACHE_TTL, data)
+    return data
+
+def _logo_flowable(logo_url, size=20, logo_bytes=None):
+    if not logo_url and not logo_bytes:
+        return None
     try:
-        data = urlopen(logo_url, timeout=4).read()
+        data = logo_bytes if logo_bytes is not None else _download_logo(logo_url)
+        if not data:
+            return None
         img = Image(BytesIO(data), width=size * mm, height=size * mm)
         img.hAlign = 'CENTER'
         return img
@@ -116,9 +141,9 @@ def _brand_mark(styles):
     return mark
 
 
-def _header(story, tenant_name, member_name=None, logo_url=None, title='SHG Passbook Statement'):
+def _header(story, tenant_name, member_name=None, logo_url=None, title='SHG Passbook Statement', logo_bytes=None):
     st = _base_styles()
-    group_logo = _logo_flowable(logo_url, 19)
+    group_logo = _logo_flowable(logo_url, 19, logo_bytes)
     left_logo = group_logo or _brand_mark(st)
     group_text = [
         Paragraph(str(tenant_name or 'Bharat Bachat Group'), st['group']),
@@ -199,10 +224,10 @@ def _notes_signature(tenant_name, styles):
     return wrap
 
 
-def passbook_pdf(tenant_name, member_name, rows, logo_url=None):
+def passbook_pdf(tenant_name, member_name, rows, logo_url=None, logo_bytes=None):
     buf, doc=_doc('Bharat Bachat Passbook Statement')
     st=_base_styles(); story=[]
-    _header(story,tenant_name,member_name,logo_url,'SHG Passbook Statement')
+    _header(story,tenant_name,member_name,logo_url,'SHG Passbook Statement',logo_bytes)
     credits=sum(float(r.get('amount',0) or 0) for r in rows if float(r.get('amount',0) or 0)>0)
     debits=-sum(float(r.get('amount',0) or 0) for r in rows if float(r.get('amount',0) or 0)<0)
     closing=float(rows[-1].get('running_balance',0) or 0) if rows else 0
@@ -217,10 +242,10 @@ def passbook_pdf(tenant_name, member_name, rows, logo_url=None):
     buf.seek(0); return buf
 
 
-def receipt_pdf(tenant_name, member_name, amount, receipt_type, reference, date_text='', account='', logo_url=None, note=''):
+def receipt_pdf(tenant_name, member_name, amount, receipt_type, reference, date_text='', account='', logo_url=None, note='', logo_bytes=None):
     buf, doc=_doc('Bharat Bachat Official Receipt')
     st=_base_styles(); story=[]
-    _header(story,tenant_name,member_name,logo_url,'Official Payment Receipt')
+    _header(story,tenant_name,member_name,logo_url,'Official Payment Receipt',logo_bytes)
     status='Recorded'
     info=Table([
         [Paragraph('<b>Receipt Type</b>',st['label']),Paragraph(str(receipt_type),st['body']),Paragraph('<b>Reference</b>',st['label']),Paragraph(str(reference),st['body'])],
@@ -239,6 +264,6 @@ def receipt_pdf(tenant_name, member_name, amount, receipt_type, reference, date_
     buf.seek(0); return buf
 
 
-def receipt_bundle_pdf(tenant_name, member_name, rows, logo_url=None):
+def receipt_bundle_pdf(tenant_name, member_name, rows, logo_url=None, logo_bytes=None):
     # The receipt bundle intentionally uses the same passbook visual system so every PDF from the app feels like one product.
-    return passbook_pdf(tenant_name, member_name, rows, logo_url)
+    return passbook_pdf(tenant_name, member_name, rows, logo_url, logo_bytes)

@@ -21,6 +21,15 @@ class TenantSettingsUpdate(BaseModel):
     opening_cash: float | None = Field(default=None, ge=0)
     opening_bank: float | None = Field(default=None, ge=0)
     kist_per_share: float | None = Field(default=None, gt=0)
+    bc_due_date: int | None = Field(default=None, ge=1, le=28)
+    bc_per_day_penalty: float | None = Field(default=None, ge=0)
+    loan_interest_rate_per_month: float | None = Field(default=None, ge=0, le=100)
+    loan_per_day_penalty: float | None = Field(default=None, ge=0)
+    loan_due_date: int | None = Field(default=None, ge=1, le=28)
+    required_admin_approvals: int | None = Field(default=None, ge=1, le=20)
+    max_loan_multiplier: float | None = Field(default=None, gt=0, le=1000)
+    min_group_reserve_balance: float | None = Field(default=None, ge=0)
+    min_loan_amount: float | None = Field(default=None, ge=0)
 
 class TenantCreate(BaseModel):
     name: str = Field(min_length=2, max_length=120)
@@ -87,6 +96,8 @@ class MoneyInCreate(BaseModel):
     member_id: str | None = None
     amount: float = Field(gt=0)
     type: Literal["interest", "penalty"]
+    # Penalties are separated for the bank-style Profit calculation.
+    penalty_category: Literal["bc", "loan"] = "bc"
     account: Account = "cash"
     date: DateType | None = None
     note: str = ""
@@ -115,6 +126,7 @@ class LoanPayment(BaseModel):
 
 class LoanRequestCreate(BaseModel):
     amount: float = Field(gt=0)
+    months: int = Field(default=2, ge=1, le=60)
     purpose: str = Field(default="", max_length=300)
 
 

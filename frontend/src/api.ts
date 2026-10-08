@@ -14,7 +14,7 @@ const BASE = (isPrivateHost && (!envBase || envIsLocalhost))
 const inFlight = new Map<string, Promise<unknown>>();
 type CacheEntry={expiresAt:number;value:unknown};
 const getCache = new Map<string,CacheEntry>();
-const GET_TTL_MS = 15000;
+const GET_TTL_MS = 5000;
 const API_TIMING_LOG = String(import.meta.env.VITE_API_TIMING_LOG ?? 'true').toLowerCase() !== 'false';
 
 function logApiTiming(message:string, data?:unknown){
@@ -84,6 +84,26 @@ async function request<T>(path:string,options:RequestInit={}):Promise<T>{
   return run;
 }
 
+
+export function prefetchGroupRoute(tid:string, route:string, role?:string, memberId?:string){
+  if(!tid) return;
+  const safe = (promise:Promise<unknown>) => { void promise.catch(()=>null); };
+  if(route==='/members') return safe(api.members(tid));
+  if(route==='/register') return safe(api.registerOverview(tid));
+  if(route==='/ledger') return safe(api.ledgerOverview(tid));
+  if(route==='/analytics'){
+    if(role==='member' && memberId) return safe(Promise.all([api.passbook(tid,memberId),api.analytics(tid,12,undefined,memberId)]).then(()=>undefined));
+    return safe(Promise.all([api.members(tid),api.analytics(tid,12)]).then(()=>undefined));
+  }
+  if(route==='/passbook'){
+    if(role==='member' && memberId) return safe(api.passbook(tid,memberId));
+    return safe(api.members(tid).then(ms=>{const first=ms[0]?._id; return first?api.passbook(tid,first):undefined;}));
+  }
+  if(route==='/loans') return safe(api.loansOverview(tid));
+  if(route==='/personal-loan') return safe(api.personalLoanOverview(tid));
+  if(route==='/admin' && role!=='super_admin') return safe(api.adminOverview(tid));
+}
+
 export const api={
  login:(phone:string,password:string)=>request<{access_token:string;user:User}>('/auth/login',{method:'POST',body:JSON.stringify({phone,password})}),
  me:()=>request<User>('/auth/me'),
@@ -101,6 +121,7 @@ export const api={
  adminStatus:(id:string,active:boolean)=>request<any>(`/super-admin/users/${id}/status`,{method:'PATCH',body:JSON.stringify({active})}),
  resetUserPassword:(id:string,password:string)=>request<any>(`/super-admin/users/${id}/reset-password`,{method:'POST',body:JSON.stringify({password})}),
  dashboard:(id:string)=>request<any>(`/group/${id}/dashboard`),
+ accounting:(id:string,view:string,params="")=>request<any>(`/group/${id}/accounting/${view}${params}`),
  adminOverview:(id:string)=>request<any>(`/group/${id}/admin-overview`),
  summary:(id:string,memberId?:string)=>request<any>(`/group/${id}/summary${memberId?`?member_id=${encodeURIComponent(memberId)}`:''}`),
  tenant:(id:string)=>request<Tenant>(`/group/${id}`),

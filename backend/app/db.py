@@ -35,6 +35,13 @@ def get_db() -> AsyncIOMotorDatabase:
 
 async def create_indexes():
     d = get_db()
+    # Lightweight one-time-compatible field backfill. MongoDB is schemaless, so
+    # legacy transactions are normalized into the explicit accounting buckets
+    # used by the new dashboard/loan engine without changing their amount.
+    await d.transactions.update_many({"type":"loan_repayment","principal_repaid":{"$exists":False}}, [{"$set":{"principal_repaid":{"$ifNull":["$principal",0]},"loan_interest_collected":{"$ifNull":["$interest",0]},"loan_penalty_collected":{"$ifNull":["$loan_penalty_collected",0]}}}])
+    await d.transactions.update_many({"type":"penalty","$or":[{"payment_category":"bc"},{"penalty_category":"bc"}],"bc_regular_kist_penalty":{"$exists":False}}, [{"$set":{"bc_regular_kist_penalty":{"$ifNull":["$amount",0]}}}])
+    await d.transactions.update_many({"type":"penalty","$or":[{"payment_category":"loan"},{"penalty_category":"loan"}],"loan_penalty_collected":{"$exists":False}}, [{"$set":{"loan_penalty_collected":{"$ifNull":["$amount",0]}}}])
+    await d.transactions.update_many({"type":"interest","payment_category":"other_interest","other_interest":{"$exists":False}}, [{"$set":{"other_interest":{"$ifNull":["$amount",0]}}}])
     # Authentication / tenant isolation
     await d.users.create_index("phone", unique=True)
     await d.users.create_index([("tenant_id", 1), ("role", 1)])
@@ -56,11 +63,15 @@ async def create_indexes():
     await d.transactions.create_index([("tenant_id", 1), ("share_id", 1), ("date", -1)])
     await d.transactions.create_index([("tenant_id", 1), ("type", 1), ("date", -1)])
     await d.transactions.create_index([("tenant_id", 1), ("expense_id", 1), ("type", 1)])
+    await d.transactions.create_index([("tenant_id", 1), ("bc_penalty_key", 1)], unique=True, partialFilterExpression={"bc_penalty_key":{"$type":"string"}})
+    await d.transactions.create_index([("tenant_id", 1), ("loan_interest_key", 1)])
+    await d.transactions.create_index([("tenant_id", 1), ("loan_penalty_key", 1)])
 
     await d.loans.create_index([("tenant_id", 1), ("member_id", 1), ("status", 1), ("created_at", -1)])
     await d.loans.create_index([("tenant_id", 1), ("status", 1), ("created_at", -1)])
     await d.loan_requests.create_index([("tenant_id", 1), ("member_id", 1), ("created_at", -1)])
     await d.loan_requests.create_index([("tenant_id", 1), ("status", 1), ("created_at", -1)])
+    await d.loan_requests.create_index([("tenant_id", 1), ("member_id", 1), ("status", 1)])
 
     await d.expenses.create_index([("tenant_id", 1), ("date", -1)])
     await d.expense_categories.create_index([("tenant_id", 1), ("name", 1)], unique=True)

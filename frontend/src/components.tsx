@@ -5,8 +5,8 @@ import { motion } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
 import { BarChart3, BookOpen, ChevronDown, CreditCard, FileText, Home, LogOut, MoreHorizontal, Receipt, ShieldCheck, Smartphone, UserCircle, Users, WalletCards, X, Bell, Settings, Sun, Moon, Palette, Check } from 'lucide-react';
 import { useStore } from './store';
-import { tr, trError } from './i18n';
-import { api } from './api';
+import { tr, trError, trDynamic, appLocale } from './i18n';
+import { api, prefetchGroupRoute } from './api';
 
 type InstallPromptEvent = Event & { prompt:()=>Promise<void>; userChoice:Promise<{outcome:'accepted'|'dismissed'}> };
 
@@ -53,7 +53,7 @@ export function ThemeSettings({onDone}:{onDone?:()=>void}={}){
   useEffect(()=>{const t=themes[theme];document.documentElement.dataset.theme='palette';document.documentElement.dataset.palette=theme;for(const [k,v] of Object.entries(t))if(k!=='label')document.documentElement.style.setProperty(`--bb-${k}`,v);document.documentElement.style.setProperty('--bb-accent',t.accent);localStorage.setItem('bb-theme-palette',theme)},[theme]);
   return <div className="settings-panel">
     <div className="settings-row"><div><b>{tr('Language')}</b><span>{tr('Choose app language')}</span></div><button className="setting-pill" onClick={()=>{const n=i18n.language==='en'?'hi':'en';i18n.changeLanguage(n);localStorage.setItem('bb-lang',n);document.documentElement.lang=n}}>{i18n.language==='en'?'English':'हिंदी'}</button></div>
-    <div className="settings-row settings-theme-row"><div><b>{tr('Theme')}</b><span>Choose your app-wide 2026 theme</span></div><div className="theme-grid">{(Object.keys(themes) as ThemeKey[]).map(k=><button type="button" key={k} className={`theme-choice ${theme===k?'active':''}`} onClick={()=>setTheme(k)}><span className="theme-swatch" style={{background:themes[k].accent}}/><span>{themes[k].label}</span>{theme===k&&<Check size={14}/>}</button>)}</div></div>
+    <div className="settings-row settings-theme-row"><div><b>{tr('Theme')}</b><span>{tr('Choose your app-wide 2026 theme')}</span></div><div className="theme-grid">{(Object.keys(themes) as ThemeKey[]).map(k=><button type="button" key={k} className={`theme-choice ${theme===k?'active':''}`} onClick={()=>setTheme(k)}><span className="theme-swatch" style={{background:themes[k].accent}}/><span>{tr(themes[k].label)}</span>{theme===k&&<Check size={14}/>}</button>)}</div></div>
     {onDone&&<button type="button" className="btn-primary w-full mt-3" onClick={onDone}>{tr('Done')}</button>}
   </div>
 }
@@ -115,6 +115,13 @@ export function Layout({children}:{children:ReactNode}){
     return()=>document.removeEventListener('pointerdown',close,true);
   },[profile]);
   useEffect(()=>{void refreshNotifications(false)},[user?.tenant_id]);
+  const prefetch=(route:string)=>prefetchGroupRoute(user?.tenant_id||tenant?._id||'',route,user?.role,user?.member_id);
+  useEffect(()=>{
+    const tid=user?.tenant_id||tenant?._id||''; if(!tid)return;
+    const run=()=>{prefetchGroupRoute(tid,'/analytics',user?.role,user?.member_id);prefetchGroupRoute(tid,'/loans',user?.role,user?.member_id);prefetchGroupRoute(tid,'/passbook',user?.role,user?.member_id)};
+    const w=window as any; const id=w.requestIdleCallback? w.requestIdleCallback(run,{timeout:1800}):window.setTimeout(run,900);
+    return()=>{if(w.cancelIdleCallback)w.cancelIdleCallback(id);else window.clearTimeout(id)};
+  },[user?.tenant_id,user?.role,user?.member_id,tenant?._id]);
 
   return <div className="app-shell" data-route={loc.pathname}><InstallBanner/>
     <header className="app-header safe-top">
@@ -146,7 +153,7 @@ export function Layout({children}:{children:ReactNode}){
       <aside className="desktop-sidebar">
         <div className="sidebar-brand"><Logo compact src={tenant?.logo_url}/></div>
         <nav className="sidebar-nav">
-          {visible.map(([to,label,Icon])=><Link key={to} to={to} className={`sidebar-link ${loc.pathname===to || (to!=='/dashboard' && loc.pathname.startsWith(`${to}/`))?'is-active':''}`}><Icon size={19}/><span>{t(label)}</span></Link>)}
+          {visible.map(([to,label,Icon])=><Link key={to} to={to} onMouseEnter={()=>prefetch(to)} onTouchStart={()=>prefetch(to)} className={`sidebar-link ${loc.pathname===to || (to!=='/dashboard' && loc.pathname.startsWith(`${to}/`))?'is-active':''}`}><Icon size={19}/><span>{t(label)}</span></Link>)}
         </nav>
         <div className="sidebar-footer"><span>{user?.role==='super_admin'?tr('Super Admin'):user?.role==='group_admin'?tr('Group Admin'):tr('Member')}</span></div>
       </aside>
@@ -157,11 +164,11 @@ export function Layout({children}:{children:ReactNode}){
     </div>
 
     <nav className="mobile-nav safe-bottom" aria-label={tr("Primary navigation")}>
-      {primary.map(([to,label,Icon])=><Link key={to} to={to} className={`mobile-nav-item ${loc.pathname===to || (to!=='/dashboard' && loc.pathname.startsWith(`${to}/`))?'is-active':''}`}>{loc.pathname===to&&<motion.span layoutId="bb-nav-active" className="mobile-nav-active" transition={{type:'spring',stiffness:420,damping:30}}/>}<Icon size={19}/><span>{t(label)}</span></Link>)}
+      {primary.map(([to,label,Icon])=><Link key={to} to={to} onTouchStart={()=>prefetch(to)} className={`mobile-nav-item ${loc.pathname===to || (to!=='/dashboard' && loc.pathname.startsWith(`${to}/`))?'is-active':''}`}>{loc.pathname===to&&<motion.span layoutId="bb-nav-active" className="mobile-nav-active" transition={{type:'spring',stiffness:420,damping:30}}/>}<Icon size={19}/><span>{t(label)}</span></Link>)}
       {hasMore&&<button type="button" className={`mobile-nav-item ${active && !primary.some(x=>x[0]===active[0])?'is-active':''}`} onClick={()=>setMore(v=>!v)}><MoreHorizontal size={20}/><span>{t(mobileLabel('more'))}</span></button>}
     </nav>
 
-    {notifOpen&&<div className="notification-overlay" onMouseDown={e=>{if(e.target===e.currentTarget)closeNotifications()}}><div className="notification-panel"><div className="notification-head"><div><b>{tr('Notifications')}</b><span>{notifications.length} {tr('entries')}</span></div><button className="icon-btn" onClick={closeNotifications}><X size={18}/></button></div><div className="notification-list">{notifications.map((n:any)=><div className={`notification-item ${n.read?'read':''}`} key={n._id}><div><b>{n.title}</b><p>{n.body}</p><small>{n.created_at?new Date(n.created_at).toLocaleString():''}</small></div><button className="notification-delete" onClick={async()=>{try{if(user?.tenant_id)await api.deleteNotification(user.tenant_id,n._id);setNotifications(x=>x.filter(v=>v._id!==n._id));setUnread(x=>Math.max(0,x-(n.read?0:1)))}catch{}}}><X size={15}/></button></div>)}{!notifications.length&&<div className="empty-state">{tr('No data yet')}</div>}</div></div></div>}
+    {notifOpen&&<div className="notification-overlay" onMouseDown={e=>{if(e.target===e.currentTarget)closeNotifications()}}><div className="notification-panel"><div className="notification-head"><div><b>{tr('Notifications')}</b><span>{notifications.length} {tr('entries')}</span></div><button className="icon-btn" onClick={closeNotifications}><X size={18}/></button></div><div className="notification-list">{notifications.map((n:any)=><div className={`notification-item ${n.read?'read':''}`} key={n._id}><div><b>{trDynamic(n.title)}</b><p>{trDynamic(n.body)}</p><small>{n.created_at?new Date(n.created_at).toLocaleString(appLocale()):''}</small></div><button className="notification-delete" onClick={async()=>{try{if(user?.tenant_id)await api.deleteNotification(user.tenant_id,n._id);setNotifications(x=>x.filter(v=>v._id!==n._id));setUnread(x=>Math.max(0,x-(n.read?0:1)))}catch{}}}><X size={15}/></button></div>)}{!notifications.length&&<div className="empty-state">{tr('No data yet')}</div>}</div></div></div>}
     {settings&&<Modal title={tr('Settings')} onClose={()=>setSettings(false)}><ThemeSettings onDone={()=>setSettings(false)}/></Modal>}
     {toast&&<div className="bb-toast" role="status">{toast}</div>}
     {more&&<div className="mobile-more-overlay" onClick={()=>setMore(false)}>
@@ -169,7 +176,7 @@ export function Layout({children}:{children:ReactNode}){
         <div className="sheet-handle"/>
         <div className="sheet-head"><div><b>{t('more')}</b><span>{tenant?.name||''}</span></div><button type="button" className="icon-btn" onClick={()=>setMore(false)}><X size={19}/></button></div>
         <div className="more-grid">
-          {visible.map(([to,label,Icon])=><Link key={to} to={to} className={`more-item ${loc.pathname===to || (to!=='/dashboard' && loc.pathname.startsWith(`${to}/`))?'is-active':''}`}><Icon size={21}/><span>{t(label)}</span></Link>)}
+          {visible.map(([to,label,Icon])=><Link key={to} to={to} onTouchStart={()=>prefetch(to)} onMouseEnter={()=>prefetch(to)} className={`more-item ${loc.pathname===to || (to!=='/dashboard' && loc.pathname.startsWith(`${to}/`))?'is-active':''}`}><Icon size={21}/><span>{t(label)}</span></Link>)}
         </div>
       </div>
     </div>}

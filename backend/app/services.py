@@ -40,8 +40,18 @@ async def tenant_summary(tenant_id: str, member_id: str | None = None):
             {"$project": {
                 "type": 1,
                 "account": 1,
+                "payment_category": 1,
+                "penalty_category": 1,
                 "amount": {"$convert": {"input": {"$ifNull": ["$amount", 0]}, "to": "double", "onError": 0, "onNull": 0}},
                 "interest_value": {"$convert": {"input": {"$ifNull": ["$interest", 0]}, "to": "double", "onError": 0, "onNull": 0}},
+            "loan_interest_value": {"$convert": {"input": {"$ifNull": ["$loan_interest_collected", 0]}, "to": "double", "onError": 0, "onNull": 0}},
+            "loan_penalty_value": {"$convert": {"input": {"$ifNull": ["$loan_penalty_collected", 0]}, "to": "double", "onError": 0, "onNull": 0}},
+            "bc_penalty_value": {"$convert": {"input": {"$ifNull": ["$bc_regular_kist_penalty", 0]}, "to": "double", "onError": 0, "onNull": 0}},
+                "loan_interest_value": {"$convert": {"input": {"$ifNull": ["$loan_interest_collected", 0]}, "to": "double", "onError": 0, "onNull": 0}},
+                "loan_penalty_value": {"$convert": {"input": {"$ifNull": ["$loan_penalty_collected", 0]}, "to": "double", "onError": 0, "onNull": 0}},
+                "bc_penalty_value": {"$convert": {"input": {"$ifNull": ["$bc_regular_kist_penalty", 0]}, "to": "double", "onError": 0, "onNull": 0}},
+                "other_interest_value": {"$convert": {"input": {"$ifNull": ["$other_interest", 0]}, "to": "double", "onError": 0, "onNull": 0}},
+                "other_penalty_value": {"$convert": {"input": {"$ifNull": ["$other_penalty", 0]}, "to": "double", "onError": 0, "onNull": 0}},
                 "is_real": {"$and": [
                     {"$not": [{"$in": ["$type", ["expense_allocation", "expense"]]}]},
                     {"$eq": [{"$type": "$expense_id"}, "missing"]},
@@ -50,11 +60,18 @@ async def tenant_summary(tenant_id: str, member_id: str | None = None):
             {"$group": {
                 "_id": None,
                 "contributions": {"$sum": {"$cond": [{"$eq": ["$type", "contribution"]}, "$amount", 0]}},
+                "regular_contributions": {"$sum": {"$cond": [{"$and": [{"$eq": ["$type", "contribution"]}, {"$or": [{"$eq": ["$payment_category", "monthly_kist"]}, {"$eq": ["$payment_category", None]}, {"$eq": [{"$type": "$payment_category"}, "missing"]}]}]}, "$amount", 0]}},
                 "interest": {"$sum": {"$cond": [{"$eq": ["$type", "interest"]}, "$amount", 0]}},
-                "penalties": {"$sum": {"$cond": [{"$eq": ["$type", "penalty"]}, "$amount", 0]}},
+                "penalties": {"$sum": {"$add": ["$bc_penalty_value", "$loan_penalty_value", "$other_penalty_value"]}},
+                "bc_penalties": {"$sum": {"$add": ["$bc_penalty_value", {"$cond": [{"$and": [{"$eq": ["$type", "penalty"]}, {"$ne": ["$payment_category", "loan"]}, {"$eq": ["$bc_penalty_value", 0]}]}, "$amount", 0]}]}},
+                "loan_penalties": {"$sum": {"$add": ["$loan_penalty_value", {"$cond": [{"$and": [{"$eq": ["$type", "penalty"]}, {"$or": [{"$eq": ["$payment_category", "loan"]}, {"$eq": ["$penalty_category", "loan"]}]}, {"$eq": ["$loan_penalty_value", 0]}]}, "$amount", 0]}]}},
                 "repayments": {"$sum": {"$cond": [{"$eq": ["$type", "loan_repayment"]}, "$amount", 0]}},
                 "loan_disbursed": {"$sum": {"$cond": [{"$eq": ["$type", "loan_disbursement"]}, {"$abs": "$amount"}, 0]}},
-                "loan_interest_income": {"$sum": {"$cond": [{"$eq": ["$type", "loan_repayment"]}, "$interest_value", 0]}},
+                "cash_asset_outflow": {"$sum": {"$cond": [{"$and": [{"$in": ["$type", ["loan_disbursement", "investment_disbursement", "asset_purchase"]]}, {"$eq": [{"$ifNull": ["$account", "cash"]}, "cash"]}]}, {"$abs": "$amount"}, 0]}},
+                "bank_asset_outflow": {"$sum": {"$cond": [{"$and": [{"$in": ["$type", ["loan_disbursement", "investment_disbursement", "asset_purchase"]]}, {"$eq": [{"$ifNull": ["$account", "cash"]}, "bank"]}]}, {"$abs": "$amount"}, 0]}},
+                "loan_interest_income": {"$sum": {"$cond": [{"$gt": ["$loan_interest_value", 0]}, "$loan_interest_value", {"$cond": [{"$eq": ["$type", "loan_repayment"]}, "$interest_value", 0]}]}},
+                "other_interest_income": {"$sum": {"$add": ["$other_interest_value", {"$cond": [{"$and": [{"$eq": ["$type", "interest"]}, {"$eq": ["$payment_category", "other_interest"]}]}, "$amount", 0]}]}},
+                "other_penalty_income": {"$sum": {"$add": ["$other_penalty_value", {"$cond": [{"$and": [{"$eq": ["$type", "penalty"]}, {"$eq": ["$payment_category", "other"]}]}, "$amount", 0]}]}},
                 "tx_inflow": {"$sum": {"$cond": [{"$and": ["$is_real", {"$gt": ["$amount", 0]}]}, "$amount", 0]}},
                 "tx_outflow": {"$sum": {"$cond": [{"$and": ["$is_real", {"$lt": ["$amount", 0]}]}, {"$abs": "$amount"}, 0]}},
                 "cash_inflow": {"$sum": {"$cond": [{"$and": ["$is_real", {"$eq": [{"$ifNull": ["$account", "cash"]}, "cash"]}, {"$gt": ["$amount", 0]}]}, "$amount", 0]}},
@@ -99,15 +116,21 @@ async def tenant_summary(tenant_id: str, member_id: str | None = None):
     opening_bank = float(tenant.get("opening_bank", 0) or 0)
     interest = float(tx.get("interest", 0) or 0)
     penalties = float(tx.get("penalties", 0) or 0)
+    bc_penalties = float(tx.get("bc_penalties", 0) or 0)
+    loan_penalties = float(tx.get("loan_penalties", 0) or 0)
     loan_interest_income = float(tx.get("loan_interest_income", 0) or 0)
+    other_interest_income = float(tx.get("other_interest_income", 0) or 0)
     other_income = float(tx.get("other_income", 0) or 0)
-    profit_income = interest + penalties + loan_interest_income + other_income
+    # Banking-style accounting: profit is earned income only. Expenses and
+    # loan principal movements never reduce Group Profit.
+    profit_income = loan_interest_income + bc_penalties + loan_penalties
+    bc_fund = float(tx.get("regular_contributions", 0) or 0) + interest + penalties + loan_interest_income
     exp_total = float(exp.get("total", 0) or 0)
 
     cash = opening_cash + float(tx.get("cash_inflow", 0) or 0) - float(tx.get("cash_outflow_tx", 0) or 0) - float(exp.get("cash", 0) or 0)
     bank = opening_bank + float(tx.get("bank_inflow", 0) or 0) - float(tx.get("bank_outflow_tx", 0) or 0) - float(exp.get("bank", 0) or 0)
     net_group_vault = round(cash + bank, 2)
-    group_profit = round(profit_income - exp_total, 2)
+    group_profit = round(profit_income, 2)
     cash_inflow = round(float(tx.get("tx_inflow", 0) or 0), 2)
     cash_outflow = round(float(tx.get("tx_outflow", 0) or 0) + exp_total, 2)
     cash_inflow_account = round(float(tx.get("cash_inflow", 0) or 0), 2)
@@ -117,33 +140,46 @@ async def tenant_summary(tenant_id: str, member_id: str | None = None):
 
     member_profit = None
     if member_id:
-        member_profit = round((profit_income / max(1, active_share_count)) * member_share_count - (exp_total / max(1, active_share_count)) * member_share_count, 2)
+        member_profit = round((profit_income / max(1, active_share_count)) * member_share_count, 2)
 
     return {
         "vault_balance": net_group_vault,
         "net_group_vault": net_group_vault,
+        "total_bc_fund": round(bc_fund, 2),
+        "active_account_balance": net_group_vault,
         "cash_balance": round(cash, 2),
         "bank_balance": round(bank, 2),
         "total_contributions": round(float(tx.get("contributions", 0) or 0), 2),
-        "member_principal_savings": round(float(tx.get("contributions", 0) or 0), 2),
-        "interest_collected": round(interest, 2),
+        "regular_bc_contributions": round(float(tx.get("regular_contributions", 0) or 0), 2),
+        "member_principal_savings": round(float(tx.get("regular_contributions", 0) or 0), 2),
+        "interest_collected": round(interest + loan_interest_income, 2),
+        "other_interest_collected": round(other_interest_income, 2),
+        "bank_interest_collected": round(interest, 2),
+        "loan_interest_collected": round(loan_interest_income, 2),
         "penalties": round(penalties, 2),
+        "bc_penalties": round(bc_penalties, 2),
+        "loan_penalties": round(loan_penalties, 2),
+        "other_penalties": round(float(tx.get("other_penalty_income", 0) or 0), 2),
         "loan_disbursed": round(float(tx.get("loan_disbursed", 0) or 0), 2),
         "loan_repayments": round(float(tx.get("repayments", 0) or 0), 2),
         "expenses": round(exp_total, 2),
         "profit": group_profit,
         "group_total_profit": group_profit,
+        "group_profit": group_profit,
         "cash_inflow": cash_inflow,
         "bank_inflow": bank_inflow,
         "cash_inflow_account": cash_inflow_account,
         "cash_outflow": cash_outflow,
         "cash_outflow_account": cash_outflow_account,
         "bank_outflow": bank_outflow,
+        "cash_asset_outflow": round(float(tx.get("cash_asset_outflow", 0) or 0), 2),
+        "bank_asset_outflow": round(float(tx.get("bank_asset_outflow", 0) or 0), 2),
         "members": member_count,
         "total_members": total_member_count,
         "total_shares": total_share_count,
         "active_shares": active_share_count,
         "inactive_shares": inactive_share_count,
+        "member_active_shares": member_share_count,
         "active_loans": active_loan_count,
         "member_profit": member_profit,
         "transactions_count": int(tx.get("real_tx_count", 0) or 0),
@@ -167,14 +203,18 @@ async def analytics(tenant_id: str, months: int = 12, share_no: int | None = Non
         {"$project": {
             "date": 1,
             "type": 1,
+            "payment_category": 1,
+            "penalty_category": 1,
             "amount": {"$convert": {"input": {"$ifNull": ["$amount", 0]}, "to": "double", "onError": 0, "onNull": 0}},
             "interest_value": {"$convert": {"input": {"$ifNull": ["$interest", 0]}, "to": "double", "onError": 0, "onNull": 0}},
         }},
         {"$group": {
             "_id": {"month": {"$dateToString": {"format": "%Y-%m", "date": "$date", "timezone": "UTC"}}},
             "contributions": {"$sum": {"$cond": [{"$eq": ["$type", "contribution"]}, "$amount", 0]}},
-            "interest": {"$sum": {"$cond": [{"$in": ["$type", ["interest", "penalty"]]}, "$amount", 0]}},
-            "loan_interest": {"$sum": {"$cond": [{"$eq": ["$type", "loan_repayment"]}, "$interest_value", 0]}},
+            "interest": {"$sum": {"$cond": [{"$eq": ["$type", "interest"]}, "$amount", 0]}},
+            "bc_penalties": {"$sum": {"$add": ["$bc_penalty_value", {"$cond": [{"$and": [{"$eq": ["$type", "penalty"]}, {"$ne": ["$payment_category", "loan"]}, {"$ne": ["$payment_category", "other"]}, {"$eq": ["$bc_penalty_value", 0]}]}, "$amount", 0]}]}},
+            "loan_penalties": {"$sum": {"$add": ["$loan_penalty_value", {"$cond": [{"$and": [{"$eq": ["$type", "penalty"]}, {"$or": [{"$eq": ["$payment_category", "loan"]}, {"$eq": ["$penalty_category", "loan"]}]}, {"$eq": ["$loan_penalty_value", 0]}]}, "$amount", 0]}]}},
+            "loan_interest": {"$sum": {"$cond": [{"$gt": ["$loan_interest_value", 0]}, "$loan_interest_value", {"$cond": [{"$eq": ["$type", "loan_repayment"]}, "$interest_value", 0]}]}},
             "repayments": {"$sum": {"$cond": [{"$eq": ["$type", "loan_repayment"]}, "$amount", 0]}},
             "other_income": {"$sum": {"$cond": [{"$and": [
                 {"$not": [{"$in": ["$type", ["contribution", "loan_repayment", "loan_disbursement", "expense_allocation", "expense", "interest", "penalty"]]}]},
@@ -200,12 +240,15 @@ async def analytics(tenant_id: str, months: int = 12, share_no: int | None = Non
         expense_total = exp_map.get(key, 0.0)
         interest_income = float(x.get("interest", 0) or 0)
         loan_interest_income = float(x.get("loan_interest", 0) or 0)
+        bc_penalties = float(x.get("bc_penalties", 0) or 0)
+        loan_penalties = float(x.get("loan_penalties", 0) or 0)
         other_income = float(x.get("other_income", 0) or 0)
-        profit_income = interest_income + loan_interest_income + other_income
-        profit = round(profit_income - expense_total, 2)
+        # Group Profit follows the dashboard rule: loan interest + BC penalties + loan penalties.
+        profit_income = loan_interest_income + bc_penalties + loan_penalties
+        profit = round(profit_income, 2)
         per_share = round(profit / active_shares, 2)
         member_expenses = round((expense_total / active_shares) * member_share_count, 2) if member_id else None
-        member_profit = round((profit_income / active_shares) * member_share_count - (member_expenses or 0), 2) if member_id else None
+        member_profit = round((profit_income / active_shares) * member_share_count, 2) if member_id else None
         rows.append({
             "month": start_month.strftime("%b %y"),
             "year": start_month.year,
