@@ -2196,3 +2196,46 @@ strong,[class*="amount"],[class*="balance"],[class*="money"]{font-variant-numeri
 .transaction-main strong{text-transform:capitalize}
 .transaction-amount,.transaction-amount strong{white-space:nowrap!important}
 @media(max-width:760px){.figma-page{padding-bottom:104px!important}}
+
+/* 2026-10-08 banking drill-down cards: use a unique component namespace so
+   legacy ledger/table styles can never collapse the transaction layout. */
+.bank-transaction-list{display:grid;gap:9px;margin-top:12px;padding-bottom:104px}
+.bank-transaction-card{width:100%;min-width:0;display:grid;grid-template-columns:42px minmax(0,1fr) max-content 18px;align-items:center;gap:12px;padding:14px 13px;border:1px solid #E4EBF0;border-radius:16px;background:#fff;box-shadow:0 3px 10px rgba(15,23,42,.045);text-align:left;color:#0F172A;transition:transform .12s ease,box-shadow .12s ease,border-color .12s ease}
+button.bank-transaction-card{cursor:pointer;font:inherit}
+.bank-transaction-card:hover{border-color:#C8E3D7;box-shadow:0 7px 18px rgba(15,23,42,.07);transform:translateY(-1px)}
+.bank-transaction-card:active{transform:scale(.995)}
+.bank-tx-icon{width:42px;height:42px;border-radius:50%;display:grid;place-items:center;flex:none}
+.bank-tx-icon.credit{background:#E7F8EF;color:#078451}
+.bank-tx-icon.debit{background:#FFF0F0;color:#D33F3F}
+.bank-tx-main{min-width:0;display:grid;gap:5px;align-content:center}
+.bank-tx-main strong{display:block;min-width:0;color:#14213D;font-size:13px;font-weight:900;line-height:1.2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-transform:capitalize}
+.bank-tx-main small{display:block;min-width:0;color:#788692;font-size:10px;font-weight:600;line-height:1.2;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bank-tx-badge{display:inline-flex;width:max-content;max-width:100%;padding:3px 7px;border-radius:999px;background:#F2F6F8;color:#526271;font-size:9px;font-weight:800;line-height:1.1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.bank-tx-side{min-width:max-content;display:grid;justify-items:end;gap:5px;text-align:right}
+.bank-tx-side strong{font-size:14px;font-weight:950;line-height:1;white-space:nowrap;font-variant-numeric:tabular-nums}
+.bank-tx-side small{font-size:9px;color:#82909B;font-weight:700;white-space:nowrap;font-variant-numeric:tabular-nums}
+.bank-tx-arrow{color:#A0ADB6;flex:none}
+.accounting-transaction-list{margin-top:12px!important}
+.accounting-source-card small{display:block;margin-top:5px;color:#94A3B8;font-size:9px;font-weight:700;line-height:1.2}
+.reconciliation-grid .accounting-source-card.is-credit{background:#F6FCF9!important;border-color:#D8EFE4!important}
+.reconciliation-grid .accounting-source-card.is-debit{background:#FFF9F9!important;border-color:#F4DDDD!important}
+.reconciliation-grid .accounting-source-card.is-closing{background:linear-gradient(135deg,#ECFDF5,#F7FFFB)!important;border-color:#BFE7D5!important}
+.reconciliation-grid .accounting-source-card.is-closing b{color:#047857!important}
+.app-shell[data-route^="/accounting"] .page-content>.bank-transaction-list{margin-top:12px}
+@media(max-width:520px){
+  .bank-transaction-card{grid-template-columns:38px minmax(0,1fr) max-content 14px;gap:10px;padding:12px 11px;border-radius:15px;min-height:78px}
+  .bank-tx-icon{width:38px;height:38px}
+  .bank-tx-main{gap:4px}
+  .bank-tx-main strong{font-size:11.5px}
+  .bank-tx-badge{font-size:8.5px;padding:3px 6px}
+  .bank-tx-main small{font-size:9px}
+  .bank-tx-side strong{font-size:12.5px}
+  .bank-tx-side small{font-size:8px}
+}
+@media(max-width:380px){
+  .bank-transaction-card{grid-template-columns:36px minmax(0,1fr) max-content;gap:8px}
+  .bank-tx-arrow{display:none}
+  .bank-tx-icon{width:36px;height:36px}
+  .bank-tx-main strong{font-size:11px}
+  .bank-tx-side strong{font-size:11.5px}
+}

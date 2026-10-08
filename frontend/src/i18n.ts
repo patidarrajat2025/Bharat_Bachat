@@ -67,6 +67,7 @@ const hi: Record<string, string> = {
   "Payments":"भुगतान","Loans":"ऋण","Audit":"ऑडिट","Month":"महीना",
   "One share = one financial unit":"एक शेयर = एक वित्तीय इकाई",
   "Total Members":"कुल सदस्य","Active Members":"सक्रिय सदस्य","Total Shares":"कुल शेयर",
+  "Bank Account Statement":"बैंक खाता विवरण","Cash Account Statement":"कैश खाता विवरण","Starting balance":"शुरुआती बैलेंस","Money received":"प्राप्त राशि","Money paid":"भुगतान की गई राशि","Current available balance":"वर्तमान उपलब्ध बैलेंस","Cash account statement":"कैश खाते का विवरण","Bank account statement":"बैंक खाते का विवरण","Expense ledger & payments":"खर्च लेजर और भुगतान","Earned interest & penalties":"वसूल ब्याज और जुर्माना","Earned income":"अर्जित आय","Cash account":"कैश खाता","Bank account":"बैंक खाता","Balance":"बैलेंस",
   "My Loan Status":"मेरा ऋण स्थिति","No Active Loan":"कोई सक्रिय ऋण नहीं","principal remaining":"मूलधन बाकी",
   "You can apply for an advance loan":"आप अग्रिम ऋण के लिए आवेदन कर सकते हैं","Approved Requests":"स्वीकृत अनुरोध",
   "Net Closing Balance":"अंतिम शेष बैलेंस","Total Credits":"कुल जमा","Total Debits":"कुल निकासी",
