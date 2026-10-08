@@ -693,19 +693,24 @@ async def accounting_view(tenant_id:str, view:str, period:str|None=None, account
     if view in {"register","profit","expenses","outflows","interest","closing"}:
         feed={"tenant_id":tenant_id}
         if view in {"register","closing"}:
-            feed["$or"]=[{"source_type":"expense"},{"source_type":"transaction","type":{"$nin":["expense_allocation","expense"]},"expense_id":{"$exists":False}}]
-            if account: feed["account"]=account
+            base_feed={"tenant_id":tenant_id,"$or":[{"source_type":"expense"},{"source_type":"transaction","type":{"$nin":["expense_allocation","expense"]},"expense_id":{"$exists":False}}]}
+            if account: base_feed["account"]=account
+            direction=(filter or period or "all").lower() if view=="register" else "closing"
+            # Summary cards must always use the complete bank book. The selected
+            # inflow/outflow filter controls only the rows shown below them.
+            summary_agg=await db.financial_feed.aggregate([{"$match":base_feed},{"$group":{"_id":None,"credits":{"$sum":{"$cond":[{"$gt":["$amount",0]},"$amount",0]}},"debits":{"$sum":{"$cond":[{"$lt":["$amount",0]},{"$abs":"$amount"},0]}},"count":{"$sum":1}}}]).to_list(1)
+            a=summary_agg[0] if summary_agg else {}
+            credits=round(float(a.get("credits",0) or 0),2); debits=round(float(a.get("debits",0) or 0),2)
+            opening_cash=float(tenant.get("opening_cash",0) or 0); opening_bank=float(tenant.get("opening_bank",0) or 0)
+            opening=(opening_cash+opening_bank) if not account else (opening_cash if account=="cash" else opening_bank)
+            display_feed=dict(base_feed)
             if view=="register":
-                direction=(filter or period or "all").lower()
-                if direction=="inflows": feed["amount"]={"$gt":0}
-                elif direction=="outflows": feed["amount"]={"$lt":0}
-            else: direction="closing"
-            agg=await db.financial_feed.aggregate([{"$match":feed},{"$group":{"_id":None,"credits":{"$sum":{"$cond":[{"$gt":["$amount",0]},"$amount",0]}},"debits":{"$sum":{"$cond":[{"$lt":["$amount",0]},{"$abs":"$amount"},0]}},"count":{"$sum":1}}}]).to_list(1)
-            a=agg[0] if agg else {}; credits=round(float(a.get("credits",0) or 0),2); debits=round(float(a.get("debits",0) or 0),2)
-            opening_cash=float(tenant.get("opening_cash",0) or 0); opening_bank=float(tenant.get("opening_bank",0) or 0); opening=(opening_cash+opening_bank) if not account else (opening_cash if account=="cash" else opening_bank)
-            q=feed
+                if direction=="inflows": display_feed["amount"]={"$gt":0}
+                elif direction=="outflows": display_feed["amount"]={"$lt":0}
+            q=display_feed
             rows=await db.financial_feed.find(q).sort([("date",-1),("created_at",-1),("_id",-1)]).skip(offset).limit(page_size).to_list(page_size)
-            if view=="closing" or direction=="closing": rows=await _attach_running_balances(rows,q,opening+credits-debits)
+            if view=="closing" or direction=="closing":
+                rows=await _attach_running_balances(rows,q,opening+credits-debits)
             member_ids=[]
             for r in rows:
                 if r.get("member_id"):
@@ -716,9 +721,11 @@ async def accounting_view(tenant_id:str, view:str, period:str|None=None, account
             entries=[]
             for r in rows:
                 amount=float(r.get("amount",0) or 0); name=names.get(str(r.get("member_id")),"")
-                entries.append({"id":str(r.get("source_id") or r.get("_id")),"date":str(r.get("date") or r.get("created_at")),"member_id":r.get("member_id"),"member_name":name,"type":r.get("type","transaction"),"amount":round(abs(amount),2),"account":r.get("account","cash"),"note":r.get("note","") or r.get("category","") or "","direction":"Credit" if amount>=0 else "Debit","entry_type":"Credit" if amount>=0 else "Debit","payment_category":r.get("payment_category"),"reason":r.get("note","") or r.get("category","") or r.get("type","Transaction"),"running_balance":r.get("running_balance")} )
-            total=int(a.get("count",0) or 0)
-            return {"view":view,"filter":direction,"account":account,"entries":entries,"has_more":offset+len(entries)<total,"total_entries":total,"total_credits":credits,"total_debits":debits,"grand_total":credits if direction=="inflows" else debits if direction=="outflows" else round(credits-debits,2),"opening_balance":round(opening,2),"closing_balance":round(opening+credits-debits,2),"opening_cash":opening_cash,"opening_bank":opening_bank}
+                entries.append({"id":str(r.get("source_id") or r.get("_id")),"date":str(r.get("date") or r.get("created_at")),"member_id":r.get("member_id"),"member_name":name,"type":r.get("type","transaction"),"amount":round(abs(amount),2),"account":r.get("account","cash"),"note":r.get("note","") or r.get("category","") or "","direction":"Credit" if amount>=0 else "Debit","entry_type":"Credit" if amount>=0 else "Debit","payment_category":r.get("payment_category"),"reason":r.get("note","") or r.get("category","") or r.get("type","Transaction"),"running_balance":r.get("running_balance")})
+            total=await db.financial_feed.count_documents(q)
+            display_credits=round(sum(float(r.get("amount",0) or 0) for r in rows if float(r.get("amount",0) or 0)>0),2)
+            display_debits=round(sum(abs(float(r.get("amount",0) or 0)) for r in rows if float(r.get("amount",0) or 0)<0),2)
+            return {"view":view,"filter":direction,"account":account,"entries":entries,"has_more":offset+len(entries)<total,"total_entries":total,"total_credits":credits,"total_debits":debits,"grand_total":display_credits if direction=="inflows" else display_debits if direction=="outflows" else round(credits-debits,2),"opening_balance":round(opening,2),"closing_balance":round(opening+credits-debits,2),"opening_cash":opening_cash,"opening_bank":opening_bank}
 
         if view=="expenses":
             feed={"tenant_id":tenant_id,"source_type":"expense"}
@@ -1029,9 +1036,17 @@ async def loans(tenant_id:str,member_id:str|None=None,user=Depends(current_user)
     for x in rows:
         item=serialize(x); item["member_name"]=names.get(str(x.get("member_id")),"Member"); items.append(item)
     total=await db.loans.count_documents(q); active_q={**q,"status":"active"}; active_count=await db.loans.count_documents(active_q)
-    totals=await db.loans.aggregate([{"$match":q},{"$group":{"_id":None,"principal":{"$sum":{"$convert":{"input":{"$ifNull":["$principal",0]},"to":"double","onError":0,"onNull":0}}},"outstanding":{"$sum":{"$subtract":[{"$convert":{"input":{"$ifNull":["$principal",0]},"to":"double","onError":0,"onNull":0}},{"$convert":{"input":{"$ifNull":["$principal_paid",0]},"to":"double","onError":0,"onNull":0}}]}}}}]).to_list(1)
+    totals=await db.loans.aggregate([{"$match":q},{"$group":{"_id":None,
+        "principal":{"$sum":{"$convert":{"input":{"$ifNull":["$principal",0]},"to":"double","onError":0,"onNull":0}}},
+        "outstanding":{"$sum":{"$subtract":[{"$convert":{"input":{"$ifNull":["$principal",0]},"to":"double","onError":0,"onNull":0}},{"$convert":{"input":{"$ifNull":["$principal_paid",0]},"to":"double","onError":0,"onNull":0}}]}},
+        "interest":{"$sum":{"$convert":{"input":{"$ifNull":["$expected_interest","$interest_accrued"]},"to":"double","onError":0,"onNull":0}}}
+    }}]).to_list(1)
     t=totals[0] if totals else {}
-    return {"items":items,"page":page,"page_size":page_size,"total":total,"active_count":active_count,"total_principal":round(float(t.get("principal",0) or 0),2),"total_outstanding":round(float(t.get("outstanding",0) or 0),2),"has_more":page*page_size<total}
+    return {"items":items,"page":page,"page_size":page_size,"total":total,"active_count":active_count,
+            "total_principal":round(float(t.get("principal",0) or 0),2),
+            "total_outstanding":round(float(t.get("outstanding",0) or 0),2),
+            "total_interest":round(float(t.get("interest",0) or 0),2),
+            "has_more":page*page_size<total}
 
 @router.get("/{tenant_id}/group-loans")
 async def group_loans(tenant_id:str,user=Depends(current_user)):
