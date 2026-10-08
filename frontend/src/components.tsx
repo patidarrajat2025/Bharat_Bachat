@@ -54,12 +54,14 @@ export function Pagination({page,total,pageSize=5,onChange}:{page:number;total:n
 
 export function SearchField({value,onChange,placeholder,ariaLabel}:{value:string;onChange:(value:string)=>void;placeholder:string;ariaLabel?:string}){return <div className="search-field-wrap"><input className="data-search" value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder} aria-label={ariaLabel||placeholder}/>{value&&<button type="button" className="search-clear-btn" aria-label={tr('Clear')} onClick={()=>onChange('')}><X size={17}/></button>}</div>}
 
-export function ActivityAccordion({items}:{items:{title:string;meta:string;value:string;tone?:'positive'|'negative'|'neutral';sortKey?:string}[]}){
-  const [open,setOpen]=useState(false); const [page,setPage]=useState(1); const pageSize=10;
+export function ActivityAccordion({items,onLoadMore,hasMore=false,loadingMore=false}:{items:{title:string;meta:string;value:string;tone?:'positive'|'negative'|'neutral';sortKey?:string}[];onLoadMore?:()=>void;hasMore?:boolean;loadingMore?:boolean}){
+  const [open,setOpen]=useState(false); const [page,setPage]=useState(1); const pageSize=10; const sentinelRef=useRef<HTMLDivElement|null>(null);
   const sorted=useMemo(()=>items.slice().sort((a,b)=>String(b.sortKey||'').localeCompare(String(a.sortKey||''))),[items]);
   const pages=Math.max(1,Math.ceil(sorted.length/pageSize));
   useEffect(()=>{if(page>pages)setPage(1)},[pages,page]);
-  return <section className="card activity-accordion"><button className="activity-toggle" onClick={()=>setOpen(v=>!v)}><span><b>{tr('Latest Activity')}</b><small>{tr('View Activity')} · {sorted.length} {tr('entries')}</small></span><ChevronDown className={open?'rotated':''} size={19}/></button>{open&&<><div className="activity-list transaction-history-list">{sorted.slice((page-1)*pageSize,page*pageSize).map((x,i)=>{const negative=x.tone==='negative';return <div className="activity-item gpay-activity-item" key={`${x.sortKey||''}-${i}`}><span className={`transaction-icon ${negative?'debit':'credit'}`}>{negative?<ArrowUpFromLine size={17}/>:<ArrowDownToLine size={17}/>}</span><div className="activity-main"><b>{x.title}</b><span>{x.meta}</span></div><strong className={`activity-amount ${negative?'negative':x.tone==='neutral'?'neutral':'positive'}`}>{x.value}</strong></div>})}{!sorted.length&&<div className="empty-state">{tr('No data yet')}</div>}</div>{pages>1&&<Pagination page={page} total={sorted.length} pageSize={pageSize} onChange={setPage}/>}</>}</section>}
+  useEffect(()=>{if(!open||!onLoadMore||!hasMore||loadingMore)return;const node=sentinelRef.current;if(!node)return;const observer=new IntersectionObserver(es=>{if(es[0]?.isIntersecting)onLoadMore()},{rootMargin:'350px 0px'});observer.observe(node);return()=>observer.disconnect()},[open,onLoadMore,hasMore,loadingMore,sorted.length]);
+  const visible=onLoadMore?sorted:sorted.slice((page-1)*pageSize,page*pageSize);
+  return <section className="card activity-accordion"><button className="activity-toggle" onClick={()=>setOpen(v=>!v)}><span><b>{tr('Latest Activity')}</b><small>{tr('View Activity')} · {sorted.length} {tr('entries')}</small></span><ChevronDown className={open?'rotated':''} size={19}/></button>{open&&<><div className="activity-list transaction-history-list">{visible.map((x,i)=>{const negative=x.tone==='negative';return <div className="activity-item gpay-activity-item" key={`${x.sortKey||''}-${i}`}><span className={`transaction-icon ${negative?'debit':'credit'}`}>{negative?<ArrowUpFromLine size={17}/>:<ArrowDownToLine size={17}/>}</span><div className="activity-main"><b>{x.title}</b><span>{x.meta}</span></div><strong className={`activity-amount ${negative?'negative':x.tone==='neutral'?'neutral':'positive'}`}>{x.value}</strong></div>})}{!sorted.length&&<div className="empty-state">{tr('No data yet')}</div>}</div>{onLoadMore?<div ref={sentinelRef} className="infinite-feed-sentinel">{loadingMore?tr('Loading more…'):hasMore?tr('Scroll for more'):''}</div>:pages>1&&<Pagination page={page} total={sorted.length} pageSize={pageSize} onChange={setPage}/>}</>}</section>}
 
 function InstallButton(){
   const {t}=useTranslation();
@@ -118,8 +120,7 @@ export function Layout({children}:{children:ReactNode}){
   return <div className="app-shell" data-route={loc.pathname}><InstallBanner/>
     <header className="app-header safe-top figma-header">
       <div className="app-header-inner">
-        <div className="header-mobile-menu" aria-hidden="true"><MoreHorizontal size={19}/></div>
-        <Link to={user?.role==='super_admin'?'/admin':'/dashboard'} className="header-brand"><Logo compact/><span className="header-app-title"><b>Bharat</b> <strong>Bachat</strong></span></Link>
+        <Link to={user?.role==='super_admin'?'/admin':'/dashboard'} className="header-brand"><Logo compact/><span className="header-app-title">Bharat Bachat</span></Link>
         <div className="header-context"><span className="header-context-dot"/><span className="header-context-name">{tenant?.name||tr('Group Vault')}</span><span className="header-context-role">{user?.role==='super_admin'?tr('Super Admin'):user?.role==='group_admin'?tr('Group Admin'):tr('Member')}</span></div>
         <div className="header-actions">
           <InstallButton/>

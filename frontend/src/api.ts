@@ -143,7 +143,7 @@ export const api={
   loanEligibility:(tid:string,memberId:string,amount?:number,months?:number)=>{const q=new URLSearchParams();if(amount!==undefined&&amount>0)q.set('amount',String(amount));if(months!==undefined)q.set('months',String(months));const qs=q.toString();return request<any>(`/group/${tid}/loan-eligibility/${memberId}${qs?`?${qs}`:''}`)},
  personalLoanOverview:(tid:string)=>request<any>(`/group/${tid}/personal-loan-overview`),
  transactions:(tid:string,params='')=>request<Transaction[]>(`/group/${tid}/transactions${params}`),
- groupActivity:(tid:string)=>request<any[]>(`/group/${tid}/activity`),
+ groupActivity:(tid:string,page=1,pageSize=10)=>request<any[]>(`/group/${tid}/activity?page=${page}&page_size=${pageSize}`),
  contributions:(tid:string,b:any)=>request<any>(`/group/${tid}/contributions`,{method:'POST',body:JSON.stringify(b)}),
  monthlyKistSummary:(tid:string,period:string)=>request<any>(`/group/${tid}/monthly-kist-summary?period=${encodeURIComponent(period)}`),
  monthlyKistStatus:(tid:string,mid:string,period:string)=>request<any>(`/group/${tid}/monthly-kist/${mid}?period=${encodeURIComponent(period)}`),

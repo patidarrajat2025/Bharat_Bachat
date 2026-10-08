@@ -587,7 +587,7 @@ async def loan_eligibility(tenant_id:str,member_id:str,amount:float|None=None,mo
     return {"member_id":member_id,"shares":shares,"share_value":share_value,"max_loan_multiplier":multiplier,"min_loan_amount":minimum,"credit_limit":credit_limit,"active_account_balance":available,"min_group_reserve_balance":reserve,"funds_available_for_disbursement":round(max_by_funds,2),"eligible":(requested<=credit_limit and requested>=minimum and requested<=max_by_funds) if requested else True,"interest_rate_per_month":rate,"total_interest":total_interest,"total_due":round(requested+total_interest,2),"estimated_emi":round((requested+total_interest)/max(1,int(months or 1)),2) if requested else 0}
 
 @router.get("/{tenant_id}/activity")
-async def group_activity(tenant_id:str,user=Depends(current_user)):
+async def group_activity(tenant_id:str,page:int=1,page_size:int=10,user=Depends(current_user)):
     await tenant_guard(user,tenant_id); db=get_db()
     tx=await db.transactions.find({"tenant_id":tenant_id,"type":{"$ne":"expense_allocation"}}).sort("date",-1).limit(50).to_list(50)
     ex=await db.expenses.find({"tenant_id":tenant_id}).sort("date",-1).limit(50).to_list(50)
@@ -601,10 +601,10 @@ async def group_activity(tenant_id:str,user=Depends(current_user)):
         rows.append({"kind":"transaction","type":str(x.get("type","Transaction")).replace("_"," ").title(),"amount":float(x.get("amount",0) or 0),"account":x.get("account","cash"),"date":str(x.get("date",x.get("created_at",""))),"created_at":str(x.get("created_at",x.get("date",""))),"note":x.get("note",""),"member_name":member_name,"member_id":mid,"principal":float(x.get("principal",0) or 0),"interest":float(x.get("interest",0) or 0)})
     for x in ex:
         rows.append({"kind":"expense","type":"Expense","amount":-float(x.get("amount",0) or 0),"account":x.get("account","cash"),"date":str(x.get("date",x.get("created_at",""))),"created_at":str(x.get("created_at",x.get("date",""))),"note":x.get("category","")})
-    return sorted(rows,key=lambda x:(x.get("created_at") or x.get("date") or ""),reverse=True)[:50]
+    page=max(1,page); page_size=max(1,min(page_size,100)); ordered=sorted(rows,key=lambda x:(x.get("created_at") or x.get("date") or ""),reverse=True); start=(page-1)*page_size; return ordered[start:start+page_size]
 
 @router.get("/{tenant_id}/accounting/{view}")
-async def accounting_view(tenant_id:str, view:str, period:str|None=None, account:str|None=None, filter:str|None=None, user=Depends(current_user)):
+async def accounting_view(tenant_id:str, view:str, period:str|None=None, account:str|None=None, filter:str|None=None, page:int=1, page_size:int=10, user=Depends(current_user)):
     """Bank-style accounting drill-down read model.
 
     This endpoint deliberately separates earned income/profit, operating
@@ -618,6 +618,7 @@ async def accounting_view(tenant_id:str, view:str, period:str|None=None, account
     db=get_db()
     tenant=await db.tenants.find_one({"_id":parse_oid(tenant_id)})
     if not tenant: raise HTTPException(404,"Group not found")
+    page=max(1,page); page_size=max(1,min(page_size,5000)); offset=(page-1)*page_size
 
     if view=="active-loans":
         rows=await db.loans.find({"tenant_id":tenant_id,"status":"active"}).sort("created_at",-1).to_list(5000)
@@ -698,7 +699,7 @@ async def accounting_view(tenant_id:str, view:str, period:str|None=None, account
         credits=round(sum(x["amount"] for x in rows if x["direction"]=="Credit"),2); debits=round(sum(x["amount"] for x in rows if x["direction"]=="Debit"),2)
         opening_cash=float(tenant.get("opening_cash",0) or 0); opening_bank=float(tenant.get("opening_bank",0) or 0); opening=(opening_cash+opening_bank) if not account else (opening_cash if account=="cash" else opening_bank)
         closing=round(opening+credits-debits,2)
-        return {"view":view,"filter":direction,"account":account,"entries":rows[:5000],"total_credits":credits,"total_debits":debits,"grand_total":credits if direction=="inflows" else debits,"opening_balance":round(opening,2),"closing_balance":closing,"opening_cash":opening_cash,"opening_bank":opening_bank}
+        return {"view":view,"filter":direction,"account":account,"entries":rows[offset:offset+page_size],"has_more":offset+page_size<len(rows),"total_entries":len(rows),"total_credits":credits,"total_debits":debits,"grand_total":credits if direction=="inflows" else debits,"opening_balance":round(opening,2),"closing_balance":closing,"opening_cash":opening_cash,"opening_bank":opening_bank}
 
     if view=="profit":
         entries=[]
@@ -716,13 +717,13 @@ async def accounting_view(tenant_id:str, view:str, period:str|None=None, account
                 entries.append({**base_tx(x),"source":"BC Penalty","reason":x.get("note") or "BC installment penalty","amount":round(bc_penalty,2)})
             if typ=="penalty" and not (loan_penalty or bc_penalty) and x.get("payment_category") in (None,"bc") and x.get("penalty_category","bc")!="loan":
                 entries.append({**base_tx(x),"source":"BC Penalty","reason":x.get("note") or "BC installment penalty","amount":round(float(x.get("amount",0) or 0),2)})
-        return {"view":view,"entries":entries,"grand_total":round(sum(x["amount"] for x in entries),2),"sources":{"loan_interest":round(sum(x["amount"] for x in entries if x["source"]=="Loan Interest"),2),"bc_penalties":round(sum(x["amount"] for x in entries if x["source"]=="BC Penalty"),2),"loan_penalties":round(sum(x["amount"] for x in entries if x["source"]=="Loan Penalty"),2)}}
+        return {"view":view,"entries":entries[offset:offset+page_size],"has_more":offset+page_size<len(entries),"total_entries":len(entries),"grand_total":round(sum(x["amount"] for x in entries),2),"sources":{"loan_interest":round(sum(x["amount"] for x in entries if x["source"]=="Loan Interest"),2),"bc_penalties":round(sum(x["amount"] for x in entries if x["source"]=="BC Penalty"),2),"loan_penalties":round(sum(x["amount"] for x in entries if x["source"]=="Loan Penalty"),2)}}
 
     if view=="expenses":
         rows=[]
         for x in expense_rows:
             rows.append({"id":str(x["_id"]),"date":dt(x),"category":x.get("category","Expense"),"reason":x.get("note","") or x.get("category","Expense"),"account":x.get("account","cash"),"amount":round(float(x.get("amount",0) or 0),2),"proof_url":x.get("proof_url")})
-        return {"view":view,"entries":rows,"grand_total":round(sum(x["amount"] for x in rows),2)}
+        return {"view":view,"entries":rows[offset:offset+page_size],"has_more":offset+page_size<len(rows),"total_entries":len(rows),"grand_total":round(sum(x["amount"] for x in rows),2)}
 
     if view=="outflows":
         rows=[]
@@ -732,7 +733,7 @@ async def accounting_view(tenant_id:str, view:str, period:str|None=None, account
             if typ=="loan_disbursement" or typ.startswith("investment") or typ.startswith("asset_"):
                 rows.append({**base_tx(x),"amount":abs(round(float(x.get("amount",0) or 0),2)),"outflow_type":"Loan Disbursement" if typ=="loan_disbursement" else "Asset / Investment"})
         if account: rows=[x for x in rows if x["account"]==account]
-        return {"view":view,"account":account,"entries":rows,"grand_total":round(sum(x["amount"] for x in rows),2)}
+        return {"view":view,"account":account,"entries":rows[offset:offset+page_size],"has_more":offset+page_size<len(rows),"total_entries":len(rows),"grand_total":round(sum(x["amount"] for x in rows),2)}
 
     if view=="interest":
         rows=[]
@@ -742,7 +743,7 @@ async def accounting_view(tenant_id:str, view:str, period:str|None=None, account
                 rows.append({**base_tx(x),"source":"Bank / Other Interest","amount":round(float(x.get("amount",0) or 0),2)})
             elif x.get("type")=="loan_repayment" and float(x.get("loan_interest_collected",x.get("interest",0)) or 0)>0:
                 rows.append({**base_tx(x),"source":"Member Loan Interest","amount":round(float(x.get("loan_interest_collected",x.get("interest",0)) or 0),2)})
-        return {"view":view,"entries":rows,"grand_total":round(sum(x["amount"] for x in rows),2)}
+        return {"view":view,"entries":rows[offset:offset+page_size],"has_more":offset+page_size<len(rows),"total_entries":len(rows),"grand_total":round(sum(x["amount"] for x in rows),2)}
 
     # Closing statement: credits and debits are asset movements only. Expenses
     # are debits, loan principal payouts are debits; neither is profit.
@@ -761,7 +762,7 @@ async def accounting_view(tenant_id:str, view:str, period:str|None=None, account
     credits=round(sum(x["credit"] for x in entries),2); debits=round(sum(x["debit"] for x in entries),2)
     opening=(opening_cash+opening_bank) if not account else (opening_cash if account=="cash" else opening_bank)
     closing=round(opening+credits-debits,2)
-    return {"view":view,"account":account,"opening_balance":round(opening,2),"total_credits":credits,"total_debits":debits,"closing_balance":closing,"opening_cash":round(opening_cash,2),"opening_bank":round(opening_bank,2),"entries":entries[:1000]}
+    return {"view":view,"account":account,"opening_balance":round(opening,2),"total_credits":credits,"total_debits":debits,"closing_balance":closing,"opening_cash":round(opening_cash,2),"opening_bank":round(opening_bank,2),"entries":entries[offset:offset+page_size],"has_more":offset+page_size<len(entries),"total_entries":len(entries)}
 
 @router.get("/{tenant_id}/admin-overview")
 async def admin_overview(tenant_id:str,user=Depends(admin_user)):
@@ -799,7 +800,7 @@ async def personal_loan_overview(tenant_id:str,user=Depends(current_user)):
     return {"loans":loan_rows,"requests":request_rows}
 
 @router.get("/{tenant_id}/transactions")
-async def transactions(tenant_id:str,from_date:date|None=None,to_date:date|None=None,typ:str|None=None,user=Depends(current_user)):
+async def transactions(tenant_id:str,from_date:date|None=None,to_date:date|None=None,typ:str|None=None,page:int=1,page_size:int=5000,user=Depends(current_user)):
     await tenant_guard(user,tenant_id); q={"tenant_id":tenant_id}
     if user["role"]=="member":
         q["member_id"]=str(user.get("member_id"))
@@ -813,7 +814,7 @@ async def transactions(tenant_id:str,from_date:date|None=None,to_date:date|None=
         q["date"]={};
         if from_date:q["date"]["$gte"]=datetime.combine(from_date,datetime.min.time(),tzinfo=timezone.utc)
         if to_date:q["date"]["$lte"]=datetime.combine(to_date,datetime.max.time(),tzinfo=timezone.utc)
-    rows=await get_db().transactions.find(q).sort("date",-1).to_list(5000); return [serialize(x) for x in rows]
+    page=max(1,page); page_size=max(1,min(page_size,5000)); rows=await get_db().transactions.find(q).sort([("date",-1),("created_at",-1),("_id",-1)]).skip((page-1)*page_size).limit(page_size).to_list(page_size); return [serialize(x) for x in rows]
 
 @router.post("/{tenant_id}/loans")
 async def create_loan(tenant_id:str,body:LoanCreate,user=Depends(admin_user)):
@@ -1007,7 +1008,7 @@ async def delete_expense_proof(tenant_id:str,expense_id:str,user=Depends(admin_u
     await db.expenses.update_one({"_id":exp["_id"]},{"$set":{"proof_url":None,"proof_public_id":None}}); await audit(tenant_id,user,"EXPENSE_PROOF_DELETED","expense",expense_id); return {"ok":True}
 
 @router.get("/{tenant_id}/passbook/{member_id}")
-async def passbook(tenant_id:str,member_id:str,from_date:date|None=None,to_date:date|None=None,share_no:int|None=None,user=Depends(current_user)):
+async def passbook(tenant_id:str,member_id:str,from_date:date|None=None,to_date:date|None=None,share_no:int|None=None,account:str|None=None,book:str|None=None,page:int=1,page_size:int=5000,user=Depends(current_user)):
     await tenant_guard(user,tenant_id)
     if user["role"]=="group_admin" and str(user.get("member_id"))==member_id:
         pass
@@ -1018,15 +1019,19 @@ async def passbook(tenant_id:str,member_id:str,from_date:date|None=None,to_date:
         if from_date:q["date"]["$gte"]=datetime.combine(from_date,datetime.min.time(),tzinfo=timezone.utc)
         if to_date:q["date"]["$lte"]=datetime.combine(to_date,datetime.max.time(),tzinfo=timezone.utc)
     if share_no:q["share_no"]=share_no
+    if account:q["account"]=account
+    if book=="expense":q["type"]="expense_allocation"
+    elif book in ("bank","cash"):q["account"]=book
     # Expense allocations are created when an expense is posted. Never perform
     # a tenant-wide backfill from a read endpoint: older code turned every
     # passbook open into N+1 MongoDB writes. A one-time deployment backfill (if
     # needed) is handled separately; normal reads stay strictly read-only.
+    page=max(1,page); page_size=max(1,min(page_size,5000))
     rows=await get_db().transactions.find(q).sort([("date",1),("created_at",1),("_id",1)]).to_list(10000); balance=0; out=[]
     for r in rows:
         balance+=float(r.get("amount",0)); x=serialize(r); x["running_balance"]=round(balance,2); out.append(x)
     out.reverse()
-    return out
+    start=(page-1)*page_size; return out[start:start+page_size]
 
 @router.get("/{tenant_id}/audit")
 async def audit_logs(tenant_id:str,user=Depends(require_roles("super_admin"))):
