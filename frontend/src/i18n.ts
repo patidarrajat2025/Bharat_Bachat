@@ -66,6 +66,10 @@ const hi: Record<string, string> = {
   "Admin Control & Audit":"एडमिन नियंत्रण और ऑडिट","Post share-wise Kist, manage loans, expenses and immutable audit logs":"शेयर-वार किस्त, ऋण, खर्च और ऑडिट लॉग प्रबंधन",
   "Payments":"भुगतान","Loans":"ऋण","Audit":"ऑडिट","Month":"महीना",
   "One share = one financial unit":"एक शेयर = एक वित्तीय इकाई",
+  "Total Members":"कुल सदस्य","Active Members":"सक्रिय सदस्य","Total Shares":"कुल शेयर",
+  "My Loan Status":"मेरा ऋण स्थिति","No Active Loan":"कोई सक्रिय ऋण नहीं","principal remaining":"मूलधन बाकी",
+  "You can apply for an advance loan":"आप अग्रिम ऋण के लिए आवेदन कर सकते हैं","Approved Requests":"स्वीकृत अनुरोध",
+  "Net Closing Balance":"अंतिम शेष बैलेंस","Total Credits":"कुल जमा","Total Debits":"कुल निकासी",
 };
 const en: Record<string,string> = Object.fromEntries(Object.keys(hi).map(k=>[k,k]));
 

@@ -116,9 +116,11 @@ export function Layout({children}:{children:ReactNode}){
   },[user?.tenant_id,user?.role,user?.member_id,tenant?._id]);
 
   return <div className="app-shell" data-route={loc.pathname}><InstallBanner/>
-    <header className="app-header safe-top">
+    <header className="app-header safe-top figma-header">
       <div className="app-header-inner">
+        <div className="header-mobile-menu" aria-hidden="true"><MoreHorizontal size={19}/></div>
         <Link to={user?.role==='super_admin'?'/admin':'/dashboard'} className="header-brand"><Logo compact/><span className="header-app-title"><b>Bharat</b> <strong>Bachat</strong></span></Link>
+        <div className="header-context"><span className="header-context-dot"/><span className="header-context-name">{tenant?.name||tr('Group Vault')}</span><span className="header-context-role">{user?.role==='super_admin'?tr('Super Admin'):user?.role==='group_admin'?tr('Group Admin'):tr('Member')}</span></div>
         <div className="header-actions">
           <InstallButton/>
           <LanguageToggle/>
@@ -142,7 +144,7 @@ export function Layout({children}:{children:ReactNode}){
     </header>
 
     <div className="app-body">
-      <aside className="desktop-sidebar">
+      <aside className="desktop-sidebar figma-sidebar">
         <div className="sidebar-brand"><Logo compact src={tenant?.logo_url}/></div>
         <nav className="sidebar-nav">
           {visible.map(([to,label,Icon])=><Link key={to} to={to} onMouseEnter={()=>prefetch(to)} onTouchStart={()=>prefetch(to)} className={`sidebar-link ${loc.pathname===to || (to!=='/dashboard' && loc.pathname.startsWith(`${to}/`))?'is-active':''}`}><Icon size={19}/><span>{t(label)}</span></Link>)}
@@ -150,8 +152,8 @@ export function Layout({children}:{children:ReactNode}){
         <div className="sidebar-footer"><span>{user?.role==='super_admin'?tr('Super Admin'):user?.role==='group_admin'?tr('Group Admin'):tr('Member')}</span></div>
       </aside>
 
-      <main className="app-main">
-        <div className="page-content">{children}</div>
+      <main className="app-main figma-main">
+        <div className="page-content figma-page">{children}</div>
       </main>
     </div>
 
@@ -191,32 +193,32 @@ export function ActionSheet({title,subtitle,items,onClose}:{title:string;subtitl
 }
 
 export function ListCard({children,className='',onClick}:{children:ReactNode;className?:string;onClick?:()=>void}){
-  return <article className={`list-card ${className}`} onClick={onClick}>{children}</article>;
+  return <article className={`list-card figma-list-card ${className}`} onClick={onClick}>{children}</article>;
 }
 
 export function PageTitle({title,subtitle}:{title:string;subtitle?:string}){
-  return <div className="page-heading">
-    <div><h1>{title}</h1>{subtitle&&<p>{subtitle}</p>}</div>
+  return <div className="page-heading figma-page-heading">
+    <div className="page-heading-copy"><span className="page-heading-kicker">Bharat Bachat</span><h1>{title}</h1>{subtitle&&<p>{subtitle}</p>}</div>
   </div>;
 }
 
 export function StatCard({label,value,icon}:{label:string;value:string;icon:ReactNode}){
   const key=String(label).toLowerCase();
   const tone=/(inflow|credit|contribution|collected|income)/.test(key)?'metric-inflow':/(outflow|debit|expense|repayment|penalty)/.test(key)?'metric-outflow':'';
-  return <div className={`stat-card ${tone}`}>
+  return <div className={`stat-card figma-stat-card ${tone}`}>
     <div className="stat-copy"><span>{label}</span><strong>{value}</strong></div>
     <div className="stat-icon">{icon}</div>
   </div>;
 }
 
 export function Field({label,...props}:any){
-  return <label className="form-field"><span>{label}</span><input className="input" {...props}/></label>;
+  return <label className="form-field figma-field"><span>{label}</span><input className="input" {...props}/></label>;
 }
 export function SelectField({label,value,onChange,children,...props}:any){
-  return <label className="form-field"><span>{label}</span><select className="input" value={value} onChange={onChange} {...props}>{children}</select></label>;
+  return <label className="form-field figma-field"><span>{label}</span><select className="input" value={value} onChange={onChange} {...props}>{children}</select></label>;
 }
 export function TextArea({label,...props}:any){
-  return <label className="form-field"><span>{label}</span><textarea className="input textarea" {...props}/></label>;
+  return <label className="form-field figma-field"><span>{label}</span><textarea className="input textarea" {...props}/></label>;
 }
 
 export function Modal({title,onClose,children}:{title:string;onClose:()=>void;children:ReactNode}){

@@ -1,3 +1,4 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=Poppins:wght@500;600;700;800&display=swap');
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -1778,3 +1779,379 @@ body{background:var(--figma-canvas)!important;color:var(--figma-navy)}
 .loan-top-metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px}.loan-top-metrics>div{padding:15px;border:1px solid var(--figma-line);border-radius:17px;background:#fff;display:grid;gap:5px}.loan-top-metrics span{font-size:10px;font-weight:900;color:var(--figma-muted);text-transform:uppercase}.loan-top-metrics strong{font-size:21px;color:var(--figma-navy)}.loan-borrower-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.loan-borrower-card{padding:17px;border:1px solid var(--figma-line);border-radius:20px;background:#fff;box-shadow:0 7px 22px rgba(15,23,42,.045)}.loan-borrower-head{display:flex;align-items:center;gap:10px}.loan-avatar{width:42px;height:42px;display:grid;place-items:center;border-radius:14px;background:#DCFCE7;color:#047857;font-size:15px;font-weight:950}.loan-borrower-name{display:grid;gap:3px;min-width:0;flex:1}.loan-borrower-name strong{font-size:13px;color:var(--figma-navy);overflow:hidden;text-overflow:ellipsis}.loan-borrower-name span{font-size:10px;color:var(--figma-muted);font-weight:800}.loan-borrower-meta{display:flex;justify-content:space-between;margin-top:6px;font-size:9px;color:var(--figma-muted);font-weight:850}.loan-interest-banner{margin-top:12px;padding:17px 19px;border-radius:19px;background:linear-gradient(135deg,#ECFDF5,#F8FAFC);border:1px solid #BBF7D0;display:flex;align-items:center;justify-content:space-between}.loan-interest-banner div{display:grid;gap:4px}.loan-interest-banner span{font-size:10px;color:#166534;font-weight:900}.loan-interest-banner strong{font-size:25px;color:#047857}.loan-interest-banner>svg{color:#10B981}.loan-request-card{padding:15px;border:1px solid var(--figma-line);border-radius:16px;background:#fff}.loan-request-card p{margin:4px 0;color:var(--figma-muted);font-size:11px}.loan-request-card>strong{font-size:10px;color:var(--figma-muted)}
 @media(max-width:760px){.figma-metric-grid{grid-template-columns:1fr 1fr!important}.figma-metric-grid .vault-account-card:first-child{grid-column:1/-1}.vault-secondary-strip{grid-template-columns:1fr}.vault-quick-actions{grid-template-columns:repeat(2,1fr)}.liquid-breakdown{grid-template-columns:1fr}.loan-top-metrics{grid-template-columns:1fr 1fr}.loan-top-metrics>div:last-child{grid-column:1/-1}.loan-borrower-grid{grid-template-columns:1fr}.passbook-sticky-footer{bottom:78px}}
 @media(max-width:420px){.figma-vault-hero strong{font-size:29px!important}.figma-metric-grid .vault-account-card{min-height:94px}.vault-quick-actions button{font-size:9px}.loan-top-metrics strong{font-size:18px}}
+
+/* ================================================================
+   2026 Figma production UI pass
+   Visual structure follows the Bharat Bachat Figma showcase while
+   retaining the existing routes, API contracts and business logic.
+   ================================================================ */
+
+:root{
+  --ui-navy:#0F172A;
+  --ui-navy-2:#10243A;
+  --ui-emerald:#047857;
+  --ui-emerald-dark:#065F46;
+  --ui-green:#10B981;
+  --ui-red:#EF4444;
+  --ui-amber:#F59E0B;
+  --ui-blue:#2563EB;
+  --ui-bg:#F8FAFC;
+  --ui-card:#FFFFFF;
+  --ui-line:#E2E8F0;
+  --ui-muted:#64748B;
+  --ui-soft:#ECFDF5;
+}
+html,body,#root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased;text-rendering:optimizeLegibility}
+body{background:var(--ui-bg)!important;color:var(--ui-navy)!important;font-variant-numeric:tabular-nums}
+button,input,select,textarea{font:inherit;-webkit-font-smoothing:antialiased}
+button{letter-spacing:-.005em}
+
+/* top shell */
+.app-shell{background:var(--ui-bg)!important}
+.figma-header.app-header{margin:0!important;border:0!important;border-bottom:1px solid rgba(255,255,255,.12)!important;border-radius:0!important;background:linear-gradient(90deg,#071827,#0F2A3D 60%,#0A3340)!important;color:#fff!important;box-shadow:0 8px 24px rgba(15,23,42,.12)!important;backdrop-filter:none!important}
+.figma-header .app-header-inner{height:68px;max-width:1540px;padding:0 22px;gap:14px}
+.figma-header .header-brand{color:#fff!important;min-width:210px}
+.figma-header .header-brand .brand-mark{filter:brightness(0) invert(1);opacity:.96}
+.figma-header .header-app-title{color:#fff!important;font-size:16px;letter-spacing:-.03em}
+.figma-header .header-app-title strong{color:#34D399!important}
+.figma-header .header-actions{color:#fff}
+.figma-header .language-toggle,.figma-header .header-icon-btn,.figma-header .profile-trigger{border-color:rgba(255,255,255,.18)!important;background:rgba(255,255,255,.08)!important;color:#fff!important}
+.figma-header .profile-trigger:hover,.figma-header .header-icon-btn:hover{background:rgba(255,255,255,.14)!important}
+.figma-header .avatar{background:rgba(255,255,255,.12)!important;border-color:rgba(255,255,255,.16)!important;color:#fff!important}
+.header-mobile-menu{display:none;color:#fff}
+.header-context{display:flex;align-items:center;gap:8px;min-width:0;margin-left:auto;padding:8px 12px;border:1px solid rgba(255,255,255,.14);border-radius:999px;background:rgba(255,255,255,.06);white-space:nowrap}
+.header-context-dot{width:7px;height:7px;border-radius:50%;background:#34D399;box-shadow:0 0 0 4px rgba(52,211,153,.12);flex:none}
+.header-context-name{font-size:11px;font-weight:800;overflow:hidden;text-overflow:ellipsis;max-width:180px}
+.header-context-role{font-size:9px;color:#A7F3D0;font-weight:800;padding-left:7px;border-left:1px solid rgba(255,255,255,.15)}
+
+.figma-main.app-main{padding:26px 24px 58px!important}
+.figma-page.page-content{max-width:1240px!important}
+.figma-sidebar{padding-top:20px!important}
+.figma-sidebar .sidebar-brand{padding:8px 12px 18px;border-bottom:1px solid var(--ui-line);margin-bottom:10px}
+.figma-sidebar .sidebar-link{min-height:46px;border-radius:13px;margin:2px 0;color:#64748B!important;font-weight:700}
+.figma-sidebar .sidebar-link:hover{background:#ECFDF5!important;color:#047857!important}
+.figma-sidebar .sidebar-link.is-active{background:#E8F8F0!important;color:#047857!important;box-shadow:inset 3px 0 0 #047857}
+.figma-sidebar .sidebar-link.is-active svg{stroke-width:2.4}
+.figma-sidebar .sidebar-footer{margin-top:auto;padding:12px;border:1px solid var(--ui-line);border-radius:14px;background:#fff;color:#64748B;font-size:10px;font-weight:800}
+
+/* page heading */
+.figma-page-heading{margin-bottom:18px!important;align-items:flex-start!important}
+.page-heading-copy{min-width:0}
+.page-heading-kicker{display:block;margin-bottom:5px;color:#047857;font-size:9px;font-weight:900;letter-spacing:.12em;text-transform:uppercase}
+.figma-page-heading h1{font-family:Poppins,Inter,sans-serif!important;font-size:26px!important;line-height:1.15!important;letter-spacing:-.035em!important;font-weight:800!important;color:#0F172A!important}
+.figma-page-heading p{max-width:780px!important;margin-top:6px!important;color:#64748B!important;font-size:11px!important;line-height:1.5!important}
+
+/* global cards */
+.figma-page .card,.figma-page .list-card,.figma-page .stat-card{border:1px solid var(--ui-line)!important;background:#fff!important;box-shadow:0 5px 18px rgba(15,23,42,.045)!important}
+.figma-page .card{border-radius:18px!important}
+.figma-list-card{border-radius:17px!important;transition:transform .16s ease,box-shadow .16s ease,border-color .16s ease}
+.figma-list-card.clickable-card:hover{transform:translateY(-1px);border-color:#B7DCC9!important;box-shadow:0 10px 26px rgba(15,23,42,.07)!important}
+.figma-list-card .list-card-title h3{font-size:13px!important;font-weight:800!important;color:#0F172A!important}
+.figma-list-card .list-card-title p{font-size:10px!important;color:#64748B!important}
+.figma-list-card .metric-tile{background:#F8FAFC!important;border:1px solid #E8EEF4!important;border-radius:12px!important}
+.figma-list-card .metric-tile span{font-size:8px!important;letter-spacing:.06em;color:#64748B!important}
+.figma-list-card .metric-tile strong{font-size:13px!important}
+
+.figma-stat-card{min-height:94px!important;border-radius:16px!important;padding:15px 16px!important}
+.figma-stat-card .stat-copy span{font-size:9px!important;color:#64748B!important;text-transform:uppercase;letter-spacing:.07em;font-weight:800}
+.figma-stat-card .stat-copy strong{font-family:Poppins,Inter,sans-serif;font-size:21px!important;line-height:1.08!important;color:#0F172A!important}
+.figma-stat-card .stat-icon{width:38px!important;height:38px!important;border-radius:12px!important;background:#ECFDF5!important;color:#047857!important}
+.figma-stat-card.metric-outflow .stat-icon{background:#FEF2F2!important;color:#EF4444!important}
+
+/* form system */
+.figma-field>span{margin-bottom:6px!important;color:#475569!important;font-size:9px!important;font-weight:800!important;letter-spacing:.015em}
+.figma-field .input{min-height:43px!important;border:1px solid #DCE5EC!important;border-radius:11px!important;background:#fff!important;color:#0F172A!important;font-size:12px!important;box-shadow:none!important}
+.figma-field .input:focus{border-color:#10B981!important;box-shadow:0 0 0 3px rgba(16,185,129,.11)!important}
+.figma-field .textarea{min-height:88px!important}
+.btn-primary{min-height:43px!important;border-radius:11px!important;background:linear-gradient(135deg,#047857,#059669)!important;border-color:#047857!important;color:#fff!important;font-size:11px!important;font-weight:800!important;box-shadow:0 8px 18px rgba(4,120,87,.18)!important}
+.btn-secondary{min-height:43px!important;border-radius:11px!important;border-color:#DCE5EC!important;background:#fff!important;color:#0F172A!important;font-size:11px!important;font-weight:800!important}
+
+/* dashboard: exact Figma hierarchy */
+.dashboard-hero-card{padding:18px!important;border-radius:20px!important}
+.dashboard-vault-head{margin-bottom:3px!important}
+.dashboard-group-title h2{font-family:Poppins,Inter,sans-serif!important;font-size:15px!important;font-weight:800!important}
+.dashboard-group-title p{font-size:9px!important;color:#64748B!important}
+.dashboard-group-logo{width:42px!important;height:42px!important;border-radius:13px!important;background:#ECFDF5!important;border:1px solid #D1FAE5!important}
+.segmented-switch{padding:3px!important;border-radius:12px!important;background:#F1F5F9!important;border:1px solid #E2E8F0!important;gap:3px!important}
+.segmented-switch button{min-height:34px!important;border-radius:9px!important;font-size:10px!important;font-weight:800!important;color:#64748B!important}
+.segmented-switch button.active{background:#047857!important;color:#fff!important;box-shadow:0 4px 10px rgba(4,120,87,.18)!important}
+
+/* dashboard vault metrics */
+.figma-vault-hero{min-height:150px!important;border-radius:16px!important;background:linear-gradient(135deg,#047857,#065F46)!important}
+.figma-vault-hero strong{font-family:Poppins,Inter,sans-serif!important;font-size:32px!important;font-weight:800!important}
+.figma-metric-grid{grid-template-columns:repeat(3,minmax(0,1fr))!important;gap:9px!important}
+.figma-metric-grid .vault-account-card{min-height:98px!important;padding:13px!important;border-radius:14px!important;box-shadow:none!important}
+.figma-metric-grid .vault-account-card span:first-child{font-size:9px!important;color:#64748B!important;font-weight:800!important}
+.figma-metric-grid .vault-account-card strong{font-family:Poppins,Inter,sans-serif!important;font-size:17px!important}
+.figma-metric-grid .vault-account-card small{font-size:8px!important;color:#94A3B8!important;line-height:1.35!important}
+.vault-secondary-strip button{border-radius:14px!important;box-shadow:none!important}
+.vault-secondary-strip span{font-size:9px!important}
+.vault-secondary-strip strong{font-family:Poppins,Inter,sans-serif;font-size:16px!important}
+.vault-quick-actions button{min-height:45px!important;border-radius:12px!important;font-size:9px!important}
+.active-liquid-panel{border-radius:17px!important;box-shadow:none!important}
+.active-liquid-panel h3{font-size:12px!important}
+.active-liquid-panel p{font-size:9px!important}
+.liquid-breakdown button{border:1px solid #E8EEF4!important;background:#F8FAFC!important;border-radius:11px!important}
+.liquid-breakdown button b{font-size:11px!important}
+.liquid-breakdown button span{font-size:8px!important}
+.vault-outflow-strip{border-radius:16px!important}
+.vault-breakdown-toggle{font-size:10px!important}
+
+/* kist status */
+.kist-status-section{padding:17px!important}
+.kist-status-section .section-head h2{font-size:13px!important}
+.kist-status-section .section-head p{font-size:9px!important;color:#64748B!important}
+.kist-status-grid{gap:9px!important}
+.kist-status-card{min-height:92px!important;border-radius:14px!important;border:1px solid var(--ui-line)!important;box-shadow:none!important;padding:13px!important}
+.kist-status-card span{font-size:9px!important;font-weight:800!important}
+.kist-status-card strong{font-family:Poppins,Inter,sans-serif!important;font-size:19px!important}
+.kist-status-card small{font-size:8px!important}
+
+/* passbook / ledger */
+.passbook-filter-card{border-radius:17px!important}
+.passbook-tabs button{min-height:39px!important;border-radius:10px!important;font-size:9px!important}
+.transaction-row{min-height:68px!important;border:1px solid #E8EEF4!important;border-radius:13px!important;background:#fff!important;box-shadow:none!important}
+.transaction-row:hover{border-color:#B7DCC9!important;background:#FCFEFD!important}
+.transaction-main strong{font-size:11px!important}.transaction-main small{font-size:8px!important;color:#64748B!important}
+.transaction-amount strong{font-family:Poppins,Inter,sans-serif!important;font-size:12px!important}.transaction-amount small{font-size:8px!important;color:#94A3B8!important}
+.transaction-icon{width:34px!important;height:34px!important;border-radius:10px!important}
+.accounting-source-grid{gap:9px!important}
+.accounting-source-card,.accounting-source-grid>div{border-radius:14px!important;border:1px solid var(--ui-line)!important;background:#fff!important;box-shadow:none!important;padding:14px!important}
+.accounting-source-card span,.accounting-source-grid>div span{font-size:8px!important;color:#64748B!important;font-weight:800!important;text-transform:uppercase}
+.accounting-source-card b,.accounting-source-grid>div b{font-family:Poppins,Inter,sans-serif!important;font-size:18px!important}
+.accounting-hero-total{border-radius:16px!important;background:linear-gradient(135deg,#ECFDF5,#F8FAFC)!important;border:1px solid #C7EBD8!important;box-shadow:none!important}
+.accounting-hero-total strong{font-family:Poppins,Inter,sans-serif!important;color:#047857!important}
+.accounting-ledger{overflow:hidden!important}
+.accounting-table-head{background:#F8FAFC!important;border-bottom:1px solid #E2E8F0!important;color:#64748B!important;font-size:8px!important;text-transform:uppercase;letter-spacing:.05em}
+.accounting-table-row{min-height:58px!important;border-bottom:1px solid #EEF2F6!important;font-size:10px!important}
+.accounting-table-row:last-child{border-bottom:0}
+.accounting-table-row strong{font-family:Poppins,Inter,sans-serif!important;font-size:11px!important}
+.formula-card{border-radius:13px!important;background:#F8FAFC!important;border:1px solid #E2E8F0!important}
+
+/* loans */
+.loan-top-metrics>div{border-radius:15px!important;box-shadow:none!important;padding:13px!important}
+.loan-top-metrics span{font-size:8px!important}.loan-top-metrics strong{font-family:Poppins,Inter,sans-serif!important;font-size:18px!important}
+.loan-borrower-grid{gap:10px!important}
+.loan-borrower-card{border-radius:17px!important;padding:15px!important;box-shadow:0 5px 18px rgba(15,23,42,.045)!important}
+.loan-avatar{width:38px!important;height:38px!important;border-radius:12px!important}
+.loan-borrower-name strong{font-size:11px!important}.loan-borrower-name span{font-size:8px!important}
+.figma-status-pill{min-height:22px!important;font-size:8px!important;padding:0 8px!important}
+.loan-finance-grid{gap:7px!important}.loan-finance-grid>div{padding:9px!important;border-radius:10px!important;background:#F8FAFC!important;border:1px solid #EEF2F6!important}.loan-finance-grid span{font-size:8px!important;color:#64748B!important}.loan-finance-grid b{font-size:11px!important}
+.loan-progress-track{height:7px!important;border-radius:99px!important;background:#E8EEF4!important}.loan-progress-track span{background:#10B981!important;border-radius:99px!important}
+.loan-progress-track-secondary span{background:#0F172A!important}
+.loan-interest-banner{border-radius:16px!important}
+
+/* member screens */
+.data-toolbar{padding:10px!important;border:1px solid var(--ui-line)!important;border-radius:15px!important;background:#fff!important;box-shadow:none!important}
+.data-search{min-height:41px!important;border-radius:10px!important;font-size:10px!important}
+.profile-hero{border-radius:18px!important;border:1px solid var(--ui-line)!important;background:linear-gradient(135deg,#fff,#F0FDF4)!important;box-shadow:none!important}
+.profile-hero h1{font-family:Poppins,Inter,sans-serif!important;font-size:20px!important}
+.profile-hero p{font-size:10px!important}
+.profile-segmented{margin-top:12px!important}
+.details-grid>div{border:1px solid #E8EEF4!important;border-radius:13px!important;background:#fff!important}
+.details-grid span{font-size:8px!important;color:#64748B!important}.details-grid b{font-size:11px!important}
+
+/* analytics charts */
+.chart-card{border-radius:17px!important;overflow:hidden!important}
+.chart-card h2{font-family:Poppins,Inter,sans-serif!important;font-size:13px!important}
+.chart-card p{font-size:9px!important;color:#64748B!important}
+.chart-plot{border:1px solid #EEF2F6;border-radius:13px;background:#FCFDFE;padding:6px}
+
+/* admin */
+.admin-tabs,.admin-nav-tabs{border-bottom:1px solid var(--ui-line)!important;gap:4px!important}
+.admin-tabs button,.admin-nav-tabs button{font-size:10px!important;font-weight:800!important;border-radius:9px 9px 0 0!important}
+.interest-panel summary{font-size:11px!important}
+.section-divider{padding:9px 0!important;color:#047857!important;border-bottom:1px solid #E8EEF4!important;font-size:10px!important}
+
+/* modal */
+.modal-backdrop{background:rgba(15,23,42,.52)!important;backdrop-filter:blur(5px)!important}
+.modal-card{border-radius:20px!important;border:1px solid rgba(255,255,255,.75)!important;box-shadow:0 28px 70px rgba(15,23,42,.22)!important}
+.modal-head{min-height:58px!important;padding:13px 17px!important;border-bottom:1px solid #EEF2F6!important}
+.modal-head h2{font-family:Poppins,Inter,sans-serif!important;font-size:14px!important}
+.modal-body{padding:17px!important}
+
+/* mobile */
+.mobile-nav{border-top:1px solid #E2E8F0!important;background:rgba(255,255,255,.97)!important;box-shadow:0 -7px 24px rgba(15,23,42,.07)!important}
+.mobile-nav-item{font-size:8px!important;color:#64748B!important}
+.mobile-nav-item.is-active{color:#047857!important}
+.mobile-nav-active{background:#D1FAE5!important}
+@media(max-width:900px){
+  .figma-header .app-header-inner{height:62px;padding:0 12px}
+  .figma-header .header-brand{min-width:0;flex:0 0 auto}
+  .figma-header .header-brand .header-app-title{display:none}
+  .header-context{margin-left:0;max-width:190px;padding:7px 10px}
+  .header-context-name{max-width:105px}
+  .header-context-role{display:none}
+  .figma-main.app-main{padding:17px 13px 92px!important}
+  .figma-page-heading h1{font-size:22px!important}
+  .figma-page-heading p{font-size:10px!important}
+}
+@media(max-width:640px){
+  .figma-header .app-header-inner{gap:7px}
+  .header-mobile-menu{display:grid;place-items:center;width:32px;height:32px;border:1px solid rgba(255,255,255,.16);border-radius:9px;background:rgba(255,255,255,.07)}
+  .header-context{flex:1;min-width:0;max-width:none}
+  .header-context-name{max-width:none;overflow:hidden;text-overflow:ellipsis}
+  .figma-header .header-actions{gap:5px}
+  .figma-header .profile-name,.figma-header .profile-trigger>svg{display:none}
+  .figma-header .profile-trigger{width:34px!important;height:34px!important;padding:0!important;justify-content:center}
+  .figma-header .language-toggle{width:34px!important;height:34px!important}
+  .figma-header .header-icon-btn{width:34px!important;height:34px!important}
+  .figma-page-heading{margin-bottom:13px!important}
+  .figma-page-heading h1{font-size:20px!important}
+  .dashboard-hero-card{padding:12px!important}
+  .figma-metric-grid{grid-template-columns:1fr 1fr!important}
+  .figma-metric-grid .vault-account-card:first-child{grid-column:1/-1}
+  .figma-vault-hero{min-height:128px!important;padding:17px!important}
+  .figma-vault-hero strong{font-size:27px!important}
+  .vault-quick-actions{grid-template-columns:repeat(4,1fr)!important;gap:5px!important}
+  .vault-quick-actions button{min-height:50px!important;flex-direction:column;gap:3px!important;padding:5px!important}
+  .vault-quick-actions button svg{width:16px;height:16px}
+  .vault-quick-actions button span{font-size:7px!important}
+  .loan-top-metrics{grid-template-columns:1fr 1fr!important}
+  .loan-top-metrics>div:last-child{grid-column:1/-1}
+  .accounting-source-grid{grid-template-columns:1fr 1fr!important}
+  .accounting-source-grid>div,.accounting-source-card{padding:11px!important}
+  .accounting-source-grid>div b,.accounting-source-card b{font-size:15px!important}
+  .passbook-sticky-footer{bottom:72px!important}
+}
+@media(max-width:430px){
+  .header-context-name{font-size:10px}
+  .figma-header .header-actions .install-btn{display:none}
+  .figma-main.app-main{padding-left:10px!important;padding-right:10px!important}
+  .figma-metric-grid .vault-account-card{min-height:88px!important;padding:11px!important}
+  .figma-metric-grid .vault-account-card strong{font-size:15px!important}
+  .figma-metric-grid .vault-account-card small{display:none}
+  .liquid-breakdown button{padding:8px!important}
+  .page-heading-kicker{font-size:8px}
+}
+
+/* ================================================================
+   BHARAT BACHAT — SCREEN-SPECIFIC FIGMA 2026 UI
+   Visual composition is intentionally different per financial screen.
+   Business logic, API contracts and routing remain untouched.
+   ================================================================ */
+:root{
+  --bb-figma-navy:#0F172A;--bb-figma-green:#047857;--bb-figma-green-2:#065F46;
+  --bb-figma-credit:#10B981;--bb-figma-debit:#EF4444;--bb-figma-muted:#64748B;
+  --bb-figma-bg:#F8FAFC;--bb-figma-line:#DDE7E3;--bb-figma-card:#FFFFFF;
+}
+.app-shell[data-route="/dashboard"] .figma-page,
+.app-shell[data-route="/passbook"] .figma-page,
+.app-shell[data-route="/loans"] .figma-page,
+.app-shell[data-route="/members"] .figma-page,
+.app-shell[data-route="/personal-loan"] .figma-page,
+.app-shell[data-route="/admin"] .figma-page{max-width:1120px}
+
+/* Dashboard = Vault / home */
+.app-shell[data-route="/dashboard"] .figma-page-heading{display:none}
+.app-shell[data-route="/dashboard"] .dashboard-hero-card{background:transparent!important;border:0!important;box-shadow:none!important;padding:0!important}
+.app-shell[data-route="/dashboard"] .dashboard-vault-head{background:var(--bb-figma-navy);color:#fff;border-radius:18px 18px 0 0;padding:14px 16px;margin:0}
+.app-shell[data-route="/dashboard"] .dashboard-vault-head p{color:#CBD5E1}
+.app-shell[data-route="/dashboard"] .dashboard-group-title h2{font-size:14px}
+.app-shell[data-route="/dashboard"] .dashboard-group-logo{border-color:rgba(255,255,255,.18);background:rgba(255,255,255,.1)}
+.app-shell[data-route="/dashboard"] .dashboard-hero-card>.segmented-switch{margin:0!important;background:var(--bb-figma-navy);padding:0 10px 10px;border-radius:0 0 18px 18px}
+.app-shell[data-route="/dashboard"] .dashboard-hero-card>.segmented-switch button{color:#CBD5E1;background:rgba(255,255,255,.06);border-color:rgba(255,255,255,.1)}
+.app-shell[data-route="/dashboard"] .dashboard-hero-card>.segmented-switch button.active{background:#fff;color:var(--bb-figma-navy)}
+.app-shell[data-route="/dashboard"] .figma-vault-hero{border-radius:0 0 18px 18px;margin-top:0;box-shadow:none!important}
+.app-shell[data-route="/dashboard"] .figma-metric-grid{margin-top:10px}
+.app-shell[data-route="/dashboard"] .vault-secondary-strip{margin-top:10px}
+.app-shell[data-route="/dashboard"] .vault-quick-actions{margin-top:10px}
+.app-shell[data-route="/dashboard"] .active-liquid-panel{border-radius:18px;margin-top:10px}
+.app-shell[data-route="/dashboard"] .kist-status-section{border-top:3px solid #10B981}
+
+/* Passbook = bank statement composition */
+.app-shell[data-route="/passbook"] .figma-page-heading{margin-bottom:10px}
+.app-shell[data-route="/passbook"] .figma-page-heading h1{font-size:21px}
+.passbook-summary-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px;margin:0 0 11px}
+.passbook-summary-grid .screen-summary-card{min-height:76px}
+.app-shell[data-route="/passbook"] .passbook-tabs button.active{background:var(--bb-figma-green);border-color:var(--bb-figma-green)}
+.app-shell[data-route="/passbook"] .passbook-filter-card{background:#F1F8F5;border-color:#CFE8DC}
+.app-shell[data-route="/passbook"] .passbook-list{border:1px solid var(--bb-figma-line);border-radius:18px;overflow:hidden;background:#fff}
+.app-shell[data-route="/passbook"] .transaction-row{grid-template-columns:38px minmax(0,1fr) auto 14px}
+.app-shell[data-route="/passbook"] .transaction-icon.credit{background:#DCFCE7;color:#047857}
+.app-shell[data-route="/passbook"] .transaction-icon.debit{background:#FEE2E2;color:#DC2626}
+.app-shell[data-route="/passbook"] .transaction-amount strong{font-variant-numeric:tabular-nums}
+
+/* Financial register / accounting = dense audited ledger */
+.app-shell[data-route^="/accounting"] .figma-page-heading{margin-bottom:12px}
+.app-shell[data-route^="/accounting"] .accounting-source-grid{grid-template-columns:repeat(4,minmax(0,1fr));gap:9px}
+.app-shell[data-route^="/accounting"] .accounting-source-grid>div,
+.app-shell[data-route^="/accounting"] .accounting-source-card{border-radius:15px;background:#fff;border:1px solid var(--bb-figma-line);padding:13px}
+.app-shell[data-route^="/accounting"] .accounting-source-grid>div:nth-child(2) b{color:#059669}
+.app-shell[data-route^="/accounting"] .accounting-source-grid>div:nth-child(3) b{color:#DC2626}
+.app-shell[data-route^="/accounting"] .accounting-hero-total{margin-top:10px;border-radius:18px;padding:18px 20px;background:linear-gradient(135deg,#047857,#065F46);color:#fff;display:flex;justify-content:space-between;align-items:center}
+.app-shell[data-route^="/accounting"] .accounting-hero-total strong{font-size:25px;color:#fff;font-variant-numeric:tabular-nums}
+.app-shell[data-route^="/accounting"] .accounting-ledger{margin-top:10px;border-radius:18px;overflow:hidden;padding:0}
+.app-shell[data-route^="/accounting"] .accounting-table-head{background:#F1F5F9;padding:11px 14px;font-size:9px;font-weight:900;text-transform:uppercase;color:#64748B}
+.app-shell[data-route^="/accounting"] .accounting-table-row{min-height:58px;padding:11px 14px;border-top:1px solid #EEF2F7}
+
+/* Loans = borrower tracker / credit eligibility */
+.app-shell[data-route="/loans"] .figma-page-heading{margin-bottom:10px}
+.app-shell[data-route="/loans"] .loan-top-metrics>div:first-child{background:#ECFDF5;border-color:#BBF7D0}
+.app-shell[data-route="/loans"] .loan-top-metrics>div:nth-child(2){background:#EFF6FF;border-color:#BFDBFE}
+.app-shell[data-route="/loans"] .loan-top-metrics>div:nth-child(3){background:#FFF7ED;border-color:#FED7AA}
+.app-shell[data-route="/loans"] .loan-borrower-card{position:relative;overflow:hidden}
+.app-shell[data-route="/loans"] .loan-borrower-card:before{content:"";position:absolute;left:0;top:0;bottom:0;width:3px;background:#10B981}
+.app-shell[data-route="/loans"] .loan-progress-track{height:7px;background:#E2E8F0;border-radius:999px}
+.app-shell[data-route="/loans"] .loan-progress-track>span{background:linear-gradient(90deg,#10B981,#047857)}
+.app-shell[data-route="/loans"] .loan-finance-grid{margin-top:11px}
+.app-shell[data-route="/loans"] .loan-request-card{background:#FFFBEB;border-color:#FDE68A}
+
+/* Members = directory / analysis */
+.app-shell[data-route="/members"] .figma-page-heading{margin-bottom:9px}
+.screen-summary-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px;margin:0 0 11px}
+.screen-summary-card{min-width:0;padding:12px 13px;border:1px solid var(--bb-figma-line);border-radius:15px;background:#fff;display:grid;gap:4px}
+.screen-summary-card span{font-size:9px;font-weight:900;color:#64748B;text-transform:uppercase;letter-spacing:.035em}
+.screen-summary-card strong{font-family:Poppins,Inter,sans-serif;font-size:18px;line-height:1.1;color:#0F172A;font-variant-numeric:tabular-nums}
+.screen-summary-card.is-positive{background:#ECFDF5;border-color:#BBF7D0}.screen-summary-card.is-positive strong{color:#047857}
+.screen-summary-card.is-negative{background:#FFF1F2;border-color:#FECDD3}.screen-summary-card.is-negative strong{color:#DC2626}
+.screen-summary-card.is-warning{background:#FFF7ED;border-color:#FED7AA}.screen-summary-card.is-warning strong{color:#B45309}
+.screen-summary-card.is-total{background:#F1F5F9}
+.app-shell[data-route="/members"] .data-toolbar{top:70px}
+.app-shell[data-route="/members"] .progressive-member-card{border-radius:17px;background:#fff}
+.app-shell[data-route="/members"] .progressive-member-card .list-card-head{padding-bottom:2px}
+
+/* Personal loan = application + request history */
+.app-shell[data-route="/personal-loan"] .figma-page-heading{margin-bottom:10px}
+.personal-loan-hero{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:17px 18px;margin-bottom:10px;border-radius:19px;background:linear-gradient(135deg,#047857,#065F46);color:#fff;box-shadow:0 10px 24px rgba(6,95,70,.16)}
+.personal-loan-hero>div{display:grid;gap:3px}.personal-loan-hero span{font-size:9px;text-transform:uppercase;font-weight:900;color:#A7F3D0}.personal-loan-hero strong{font-family:Poppins,Inter,sans-serif;font-size:21px}.personal-loan-hero small{font-size:10px;color:#D1FAE5}.personal-loan-hero .btn-primary{background:#fff;color:#065F46;border-color:#fff;white-space:nowrap}
+.app-shell[data-route="/personal-loan"] .personal-summary-grid{margin-bottom:12px}
+.app-shell[data-route="/personal-loan"] .personal-summary-grid+.grid .card{border-radius:18px}
+
+/* Admin = control centre */
+.app-shell[data-route="/admin"] .figma-page-heading{margin-bottom:8px}
+.app-shell[data-route="/admin"] .admin-tabs{background:#EAF2EF;border:1px solid #D5E3DD;padding:4px;border-radius:14px;display:flex;gap:4px;overflow:auto}
+.app-shell[data-route="/admin"] .admin-tabs button{border-radius:10px;font-size:10px;font-weight:900;white-space:nowrap}
+.app-shell[data-route="/admin"] .card{border-radius:18px}
+.app-shell[data-route="/admin"] .btn-primary{background:linear-gradient(135deg,#047857,#059669)}
+.app-shell[data-route="/admin"] .interest-panel{border-left:3px solid #10B981}
+.app-shell[data-route="/admin"] .admin-audit-info{border:1px dashed #CBD5E1;border-radius:14px}
+
+/* Drill-down pages are intentionally ledger-like, not dashboard-like. */
+.app-shell[data-route^="/accounting/"] .page-content>.card:not(.accounting-ledger){box-shadow:0 5px 18px rgba(15,23,42,.035)}
+.app-shell[data-route*="profit"] .accounting-hero-total{background:linear-gradient(135deg,#065F46,#047857)}
+.app-shell[data-route*="expenses"] .accounting-hero-total{background:linear-gradient(135deg,#991B1B,#DC2626)}
+.app-shell[data-route*="closing"] .accounting-hero-total{background:linear-gradient(135deg,#0F172A,#1E3A5F)}
+.app-shell[data-route*="kist"] .accounting-hero-total{background:linear-gradient(135deg,#047857,#10B981)}
+
+/* Typography / crisp financial numbers */
+body,.app-shell,input,select,textarea,button{font-family:Inter,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+h1,h2,h3,.brand-name,.header-app-title,.screen-summary-card strong,.figma-vault-hero strong,.loan-top-metrics strong{font-family:Poppins,Inter,system-ui,sans-serif}
+strong,[class*="amount"],[class*="balance"],[class*="money"]{font-variant-numeric:tabular-nums}
+
+@media(max-width:760px){
+  .passbook-summary-grid,.screen-summary-grid{grid-template-columns:1fr 1fr}
+  .passbook-summary-grid .screen-summary-card:last-child{grid-column:1/-1}
+  .personal-loan-hero{align-items:flex-start;flex-direction:column}
+  .personal-loan-hero .btn-primary{width:100%;justify-content:center}
+  .app-shell[data-route="/members"] .data-toolbar{top:62px}
+}
+@media(max-width:430px){
+  .screen-summary-card{padding:10px 11px;min-height:65px}
+  .screen-summary-card strong{font-size:16px}
+  .passbook-summary-grid .screen-summary-card strong{font-size:15px}
+  .personal-loan-hero{padding:14px;border-radius:16px}
+  .personal-loan-hero strong{font-size:18px}
+  .app-shell[data-route^="/accounting"] .accounting-source-grid{gap:7px}
+  .app-shell[data-route^="/accounting"] .accounting-hero-total{padding:15px}
+}
