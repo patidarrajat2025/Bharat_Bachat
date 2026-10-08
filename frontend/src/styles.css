@@ -1811,7 +1811,7 @@ button{letter-spacing:-.005em}
 .figma-header.app-header{margin:0!important;border:0!important;border-bottom:1px solid rgba(255,255,255,.12)!important;border-radius:0!important;background:linear-gradient(90deg,#071827,#0F2A3D 60%,#0A3340)!important;color:#fff!important;box-shadow:0 8px 24px rgba(15,23,42,.12)!important;backdrop-filter:none!important}
 .figma-header .app-header-inner{height:68px;max-width:1540px;padding:0 22px;gap:14px}
 .figma-header .header-brand{color:#fff!important;min-width:210px}
-.figma-header .header-brand .brand-mark{filter:brightness(0) invert(1);opacity:.96}
+.figma-header .header-brand .brand-mark{filter:none!important;opacity:1!important;background:#fff;border-radius:12px;padding:3px;box-shadow:0 2px 10px rgba(0,0,0,.12)}
 .figma-header .header-app-title{color:#fff!important;font-size:16px;letter-spacing:-.03em}
 .figma-header .header-app-title strong{color:#34D399!important}
 .figma-header .header-actions{color:#fff}
@@ -1978,7 +1978,7 @@ button{letter-spacing:-.005em}
 @media(max-width:900px){
   .figma-header .app-header-inner{height:62px;padding:0 12px}
   .figma-header .header-brand{min-width:0;flex:0 0 auto}
-  .figma-header .header-brand .header-app-title{display:none}
+  .figma-header .header-brand .header-app-title{display:inline!important;font-size:17px!important;color:#fff!important;white-space:nowrap!important}
   .header-context{margin-left:0;max-width:190px;padding:7px 10px}
   .header-context-name{max-width:105px}
   .header-context-role{display:none}

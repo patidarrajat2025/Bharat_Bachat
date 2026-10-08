@@ -72,7 +72,7 @@ async def dashboard(tenant_id:str,user=Depends(current_user)):
     summary_task=tenant_summary(tenant_id,member_id or None)
     tenant_task=db.tenants.find_one({"_id":parse_oid(tenant_id)})
     members_task=asyncio.sleep(0,result=[])
-    activity_task=group_activity(tenant_id,user)
+    activity_task=group_activity(tenant_id,user=user)
     # Monthly status is intentionally kept compatible with the existing UI.
     month=datetime.now(timezone.utc).strftime("%Y-%m")
     kist_task=monthly_kist_summary(tenant_id,month,user)
