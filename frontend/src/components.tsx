@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { Link, useLocation } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
-import { BarChart3, BookOpen, ChevronDown, CreditCard, FileText, Home, LogOut, MoreHorizontal, Receipt, ShieldCheck, Smartphone, UserCircle, Users, WalletCards, X, Bell, Settings, Sun, Moon, Palette, Check } from 'lucide-react';
+import { BarChart3, BookOpen, ChevronDown, CreditCard, FileText, Home, LogOut, MoreHorizontal, Receipt, ShieldCheck, Smartphone, UserCircle, Users, WalletCards, X, Bell, Settings, Sun, Moon, Palette, Check, ArrowDownToLine, ArrowUpFromLine } from 'lucide-react';
 import { useStore } from './store';
 import { tr, trError, trDynamic, appLocale } from './i18n';
 import { api, prefetchGroupRoute } from './api';
@@ -59,7 +59,7 @@ export function ActivityAccordion({items}:{items:{title:string;meta:string;value
   const sorted=useMemo(()=>items.slice().sort((a,b)=>String(b.sortKey||'').localeCompare(String(a.sortKey||''))),[items]);
   const pages=Math.max(1,Math.ceil(sorted.length/pageSize));
   useEffect(()=>{if(page>pages)setPage(1)},[pages,page]);
-  return <section className="card activity-accordion"><button className="activity-toggle" onClick={()=>setOpen(v=>!v)}><span><b>{tr('Latest Activity')}</b><small>{tr('View Activity')} · {sorted.length} {tr('entries')}</small></span><ChevronDown className={open?'rotated':''} size={19}/></button>{open&&<><div className="activity-list">{sorted.slice((page-1)*pageSize,page*pageSize).map((x,i)=><div className="activity-item" key={`${x.sortKey||''}-${i}`}><div><b>{x.title}</b><span>{x.meta}</span></div><strong className={`activity-amount ${x.tone==='negative'?'negative':x.tone==='neutral'?'neutral':'positive'}`}>{x.value}</strong></div>)}{!sorted.length&&<div className="empty-state">{tr('No data yet')}</div>}</div>{pages>1&&<Pagination page={page} total={sorted.length} pageSize={pageSize} onChange={setPage}/>}</>}</section>}
+  return <section className="card activity-accordion"><button className="activity-toggle" onClick={()=>setOpen(v=>!v)}><span><b>{tr('Latest Activity')}</b><small>{tr('View Activity')} · {sorted.length} {tr('entries')}</small></span><ChevronDown className={open?'rotated':''} size={19}/></button>{open&&<><div className="activity-list transaction-history-list">{sorted.slice((page-1)*pageSize,page*pageSize).map((x,i)=>{const negative=x.tone==='negative';return <div className="activity-item gpay-activity-item" key={`${x.sortKey||''}-${i}`}><span className={`transaction-icon ${negative?'debit':'credit'}`}>{negative?<ArrowUpFromLine size={17}/>:<ArrowDownToLine size={17}/>}</span><div className="activity-main"><b>{x.title}</b><span>{x.meta}</span></div><strong className={`activity-amount ${negative?'negative':x.tone==='neutral'?'neutral':'positive'}`}>{x.value}</strong></div>})}{!sorted.length&&<div className="empty-state">{tr('No data yet')}</div>}</div>{pages>1&&<Pagination page={page} total={sorted.length} pageSize={pageSize} onChange={setPage}/>}</>}</section>}
 
 function InstallButton(){
   const {t}=useTranslation();

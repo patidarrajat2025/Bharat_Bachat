@@ -1022,9 +1022,10 @@ async def passbook(tenant_id:str,member_id:str,from_date:date|None=None,to_date:
     # a tenant-wide backfill from a read endpoint: older code turned every
     # passbook open into N+1 MongoDB writes. A one-time deployment backfill (if
     # needed) is handled separately; normal reads stay strictly read-only.
-    rows=await get_db().transactions.find(q).sort("date",1).to_list(10000); balance=0; out=[]
+    rows=await get_db().transactions.find(q).sort([("date",1),("created_at",1),("_id",1)]).to_list(10000); balance=0; out=[]
     for r in rows:
         balance+=float(r.get("amount",0)); x=serialize(r); x["running_balance"]=round(balance,2); out.append(x)
+    out.reverse()
     return out
 
 @router.get("/{tenant_id}/audit")
