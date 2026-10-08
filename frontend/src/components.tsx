@@ -15,7 +15,7 @@ export function LanguageToggle(){
   const next=i18n.language==='en'?'hi':'en';
   return <button type="button" className="language-toggle" aria-label={t('language')}
     onClick={()=>{i18n.changeLanguage(next);localStorage.setItem('bb-lang',next);document.documentElement.lang=next}}>
-    <span>{i18n.language==='en'?'हिंदी':'English'}</span>
+    <span className="language-code">{i18n.language==='en'?'EN':'HI'}</span>
   </button>;
 }
 
@@ -41,19 +41,11 @@ const nav=[
 
 
 export function ThemeSettings({onDone}:{onDone?:()=>void}={}){
-  const themes={
-    sage:{label:'Sage Calm',accent:'#5F8D72',navy:'#244437',bg:'#F4F8F5',card:'#FFFFFF',line:'#D9E6DE'},
-    ocean:{label:'Ocean Blue',accent:'#2F6FED',navy:'#18345D',bg:'#F3F7FC',card:'#FFFFFF',line:'#D7E2F2'},
-    violet:{label:'Royal Violet',accent:'#7657D9',navy:'#30235B',bg:'#F7F5FC',card:'#FFFFFF',line:'#E1DCF3'},
-    sand:{label:'Warm Sand',accent:'#B8793D',navy:'#4E3426',bg:'#FBF7F1',card:'#FFFFFF',line:'#E9DED0'}
-  } as const;
-  type ThemeKey=keyof typeof themes;
-  const [theme,setTheme]=useState<ThemeKey>((localStorage.getItem('bb-theme-palette') as ThemeKey)||'sage');
   const {i18n}=useTranslation();
-  useEffect(()=>{const t=themes[theme];document.documentElement.dataset.theme='palette';document.documentElement.dataset.palette=theme;for(const [k,v] of Object.entries(t))if(k!=='label')document.documentElement.style.setProperty(`--bb-${k}`,v);document.documentElement.style.setProperty('--bb-accent',t.accent);localStorage.setItem('bb-theme-palette',theme)},[theme]);
+  const setLanguage=()=>{const n=i18n.language==='en'?'hi':'en';i18n.changeLanguage(n);localStorage.setItem('bb-lang',n);document.documentElement.lang=n};
   return <div className="settings-panel">
-    <div className="settings-row"><div><b>{tr('Language')}</b><span>{tr('Choose app language')}</span></div><button className="setting-pill" onClick={()=>{const n=i18n.language==='en'?'hi':'en';i18n.changeLanguage(n);localStorage.setItem('bb-lang',n);document.documentElement.lang=n}}>{i18n.language==='en'?'English':'हिंदी'}</button></div>
-    <div className="settings-row settings-theme-row"><div><b>{tr('Theme')}</b><span>{tr('Choose your app-wide 2026 theme')}</span></div><div className="theme-grid">{(Object.keys(themes) as ThemeKey[]).map(k=><button type="button" key={k} className={`theme-choice ${theme===k?'active':''}`} onClick={()=>setTheme(k)}><span className="theme-swatch" style={{background:themes[k].accent}}/><span>{tr(themes[k].label)}</span>{theme===k&&<Check size={14}/>}</button>)}</div></div>
+    <div className="settings-row"><div><b>{tr('Language')}</b><span>{tr('Choose app language')}</span></div><button className="setting-pill" onClick={setLanguage}><span className="language-code">{i18n.language==='en'?'EN':'HI'}</span></button></div>
+    <div className="settings-row settings-theme-row"><div><b>{tr('Theme')}</b><span>{tr('Bharat Bachat banking visual system')}</span></div><div className="theme-choice active figma-theme-lock"><span className="theme-swatch" style={{background:'linear-gradient(135deg,#047857,#065F46)'}}/><span>{tr('Bharat Bachat')}</span><Check size={14}/></div></div>
     {onDone&&<button type="button" className="btn-primary w-full mt-3" onClick={onDone}>{tr('Done')}</button>}
   </div>
 }
@@ -67,7 +59,7 @@ export function ActivityAccordion({items}:{items:{title:string;meta:string;value
   const sorted=useMemo(()=>items.slice().sort((a,b)=>String(b.sortKey||'').localeCompare(String(a.sortKey||''))),[items]);
   const pages=Math.max(1,Math.ceil(sorted.length/pageSize));
   useEffect(()=>{if(page>pages)setPage(1)},[pages,page]);
-  return <section className="card activity-accordion"><button className="activity-toggle" onClick={()=>setOpen(v=>!v)}><span><b>{tr('Latest Activity')}</b><small>{tr('View Activity / गतिविधियां देखें')} · {sorted.length} {tr('entries')}</small></span><ChevronDown className={open?'rotated':''} size={19}/></button>{open&&<><div className="activity-list">{sorted.slice((page-1)*pageSize,page*pageSize).map((x,i)=><div className="activity-item" key={`${x.sortKey||''}-${i}`}><div><b>{x.title}</b><span>{x.meta}</span></div><strong className={`activity-amount ${x.tone==='negative'?'negative':x.tone==='neutral'?'neutral':'positive'}`}>{x.value}</strong></div>)}{!sorted.length&&<div className="empty-state">{tr('No data yet')}</div>}</div>{pages>1&&<Pagination page={page} total={sorted.length} pageSize={pageSize} onChange={setPage}/>}</>}</section>}
+  return <section className="card activity-accordion"><button className="activity-toggle" onClick={()=>setOpen(v=>!v)}><span><b>{tr('Latest Activity')}</b><small>{tr('View Activity')} · {sorted.length} {tr('entries')}</small></span><ChevronDown className={open?'rotated':''} size={19}/></button>{open&&<><div className="activity-list">{sorted.slice((page-1)*pageSize,page*pageSize).map((x,i)=><div className="activity-item" key={`${x.sortKey||''}-${i}`}><div><b>{x.title}</b><span>{x.meta}</span></div><strong className={`activity-amount ${x.tone==='negative'?'negative':x.tone==='neutral'?'neutral':'positive'}`}>{x.value}</strong></div>)}{!sorted.length&&<div className="empty-state">{tr('No data yet')}</div>}</div>{pages>1&&<Pagination page={page} total={sorted.length} pageSize={pageSize} onChange={setPage}/>}</>}</section>}
 
 function InstallButton(){
   const {t}=useTranslation();
