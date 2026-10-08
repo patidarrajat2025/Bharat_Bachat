@@ -33,7 +33,7 @@ async def tenant_summary(tenant_id: str, member_id: str | None = None):
     faster in-place, and the API only needs the small aggregate result.
     """
     db = get_db()
-    tenant, tx_stats_rows, exp_stats_rows, counts = await asyncio.gather(
+    tenant, tx_stats_rows, exp_stats_rows, member_stats_rows, counts = await asyncio.gather(
         db.tenants.find_one({"_id": oid(tenant_id)}),
         db.transactions.aggregate([
             {"$match": {"tenant_id": tenant_id}},
@@ -95,6 +95,16 @@ async def tenant_summary(tenant_id: str, member_id: str | None = None):
                 "bank": {"$sum": {"$cond": [{"$eq": ["$account", "bank"]}, "$amount", 0]}},
             }},
         ]).to_list(1),
+        db.transactions.aggregate([
+            {"$match": {"tenant_id": tenant_id, "member_id": member_id}} if member_id else {"$match": {"tenant_id": tenant_id, "_id": {"$exists": False}}},
+            {"$project": {"type": 1, "amount": {"$convert": {"input": {"$ifNull": ["$amount", 0]}, "to": "double", "onError": 0, "onNull": 0}}}},
+            {"$group": {
+                "_id": None,
+                "regular_contributions": {"$sum": {"$cond": [{"$eq": ["$type", "contribution"]}, "$amount", 0]}},
+                "net_balance": {"$sum": "$amount"},
+                "expenses": {"$sum": {"$cond": [{"$eq": ["$type", "expense_allocation"]}, {"$abs": "$amount"}, 0]}},
+            }},
+        ]).to_list(1),
         asyncio.gather(
             db.members.count_documents({"tenant_id": tenant_id, "active": True}),
             db.members.count_documents({"tenant_id": tenant_id}),
@@ -110,6 +120,7 @@ async def tenant_summary(tenant_id: str, member_id: str | None = None):
         raise ValueError("Group not found")
     tx = tx_stats_rows[0] if tx_stats_rows else {}
     exp = exp_stats_rows[0] if exp_stats_rows else {}
+    member_stats = member_stats_rows[0] if member_stats_rows else {}
     member_count, total_member_count, total_share_count, active_share_count, inactive_share_count, active_loan_count, member_share_count = counts
 
     opening_cash = float(tenant.get("opening_cash", 0) or 0)
@@ -151,7 +162,10 @@ async def tenant_summary(tenant_id: str, member_id: str | None = None):
         "bank_balance": round(bank, 2),
         "total_contributions": round(float(tx.get("contributions", 0) or 0), 2),
         "regular_bc_contributions": round(float(tx.get("regular_contributions", 0) or 0), 2),
-        "member_principal_savings": round(float(tx.get("regular_contributions", 0) or 0), 2),
+        "member_principal_savings": round(float(member_stats.get("regular_contributions", 0) or 0), 2),
+        "member_regular_contributions": round(float(member_stats.get("regular_contributions", 0) or 0), 2),
+        "member_net_balance": round(float(member_stats.get("net_balance", 0) or 0), 2),
+        "member_expenses": round(float(member_stats.get("expenses", 0) or 0), 2),
         "interest_collected": round(interest + loan_interest_income, 2),
         "other_interest_collected": round(other_interest_income, 2),
         "bank_interest_collected": round(interest, 2),

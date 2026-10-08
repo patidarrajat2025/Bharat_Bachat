@@ -1,5 +1,6 @@
 from datetime import datetime, timezone, date
 import asyncio
+import uuid
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
 from ..db import get_db
 from ..deps import current_user, tenant_guard, require_roles, parse_oid
@@ -70,7 +71,7 @@ async def dashboard(tenant_id:str,user=Depends(current_user)):
 
     summary_task=tenant_summary(tenant_id,member_id or None)
     tenant_task=db.tenants.find_one({"_id":parse_oid(tenant_id)})
-    members_task=members(tenant_id,user)
+    members_task=asyncio.sleep(0,result=[])
     activity_task=group_activity(tenant_id,user)
     # Monthly status is intentionally kept compatible with the existing UI.
     month=datetime.now(timezone.utc).strftime("%Y-%m")
@@ -87,7 +88,7 @@ async def dashboard(tenant_id:str,user=Depends(current_user)):
         summary_task, tenant_task, members_task, activity_task, kist_task, passbook_task, loans_task, shares_task
     )
     if not tenant_row: raise HTTPException(404,"Group not found")
-    return {"tenant":serialize(tenant_row),"summary":summary_row,"members":member_rows,"activity":activity_rows,"kist":kist_row,"personal":personal_rows,"personal_loans":personal_loans,"shares":shares_rows}
+    return {"tenant":serialize(tenant_row),"summary":summary_row,"members":member_rows,"activity":activity_rows.get("items",[]) if isinstance(activity_rows,dict) else activity_rows,"activity_has_more":bool(activity_rows.get("has_more")) if isinstance(activity_rows,dict) else len(activity_rows)==10,"kist":kist_row,"personal":personal_rows,"personal_loans":personal_loans,"shares":shares_rows}
 
 @router.get("/{tenant_id}/summary")
 async def summary(tenant_id:str,user=Depends(current_user)):
@@ -219,10 +220,19 @@ async def delete_notification(tenant_id:str,notification_id:str,user=Depends(cur
     await db.notifications.update_one({"_id":row["_id"]},{"$set":{"dismissed":True,"dismissed_at":datetime.now(timezone.utc)}}); return {"ok":True}
 
 @router.get("/{tenant_id}/members")
-async def members(tenant_id:str,user=Depends(current_user)):
+async def members(tenant_id:str,user=Depends(current_user),page:int|None=None,page_size:int=10,search:str|None=None,status:str|None=None):
     await tenant_guard(user,tenant_id); db=get_db(); q={"tenant_id":tenant_id}
     if user["role"]=="member": q["_id"]=parse_oid(user.get("member_id"))
-    rows=await db.members.find(q).sort("first_name",1).to_list(2000)
+    if search:
+        import re
+        safe=re.escape(search.strip())
+        q["$or"]= [{"first_name":{"$regex":safe,"$options":"i"}},{"last_name":{"$regex":safe,"$options":"i"}},{"phone":{"$regex":safe,"$options":"i"}}]
+    if status=="active": q["active"]={"$ne":False}
+    elif status in ("inactive","pending"): q["active"]=False
+    if page is None:
+        rows=await db.members.find(q).sort("first_name",1).to_list(2000)
+    else:
+        page=max(1,page); page_size=max(1,min(page_size,50)); rows=await db.members.find(q).sort([("first_name",1),("_id",1)]).skip((page-1)*page_size).limit(page_size).to_list(page_size)
     ids=[str(row["_id"]) for row in rows]
     share_rows=await db.shares.find({"tenant_id":tenant_id,"member_id":{"$in":ids},"status":"active"}).sort("share_no",1).to_list(20000) if ids else []
     share_map={mid:[] for mid in ids}
@@ -239,7 +249,17 @@ async def members(tenant_id:str,user=Depends(current_user)):
         x["active_shares_count"]=len(active_shares); x["share_ids"]= [str(s["_id"]) for s in active_shares]
         x["share_numbers"]=[int(s.get("share_no",0)) for s in active_shares]
         out.append(x)
-    return out
+    if page is None: return out
+    # Header metrics are global to the current tenant; search/status only filters the list.
+    metric_q={"tenant_id":tenant_id}
+    if user["role"]=="member": metric_q["_id"]=parse_oid(user.get("member_id"))
+    total=await db.members.count_documents(metric_q)
+    active=await db.members.count_documents({**metric_q,"active":{"$ne":False}})
+    inactive=await db.members.count_documents({**metric_q,"active":False})
+    share_match={"tenant_id":tenant_id,"status":"active"}
+    if user["role"]=="member": share_match["member_id"]=str(user.get("member_id"))
+    share_count=await db.shares.count_documents(share_match)
+    return {"items":out,"page":page,"page_size":page_size,"total":total,"active_count":active,"inactive_count":inactive,"total_shares":share_count,"has_more":page*page_size<total}
 
 @router.post("/{tenant_id}/members")
 async def create_member(tenant_id:str,body:MemberCreate,user=Depends(admin_user)):
@@ -281,11 +301,19 @@ async def member_details(tenant_id:str,member_id:str,user=Depends(current_user))
     member_row, shares_row, passbook_row, loans_row, summary_row = await asyncio.gather(
         asyncio.sleep(0,result=serialize(member)),
         ensure_member_shares(member),
-        passbook(tenant_id,member_id,user=user),
+        passbook(tenant_id,member_id,page=1,page_size=10,user=user),
         loans(tenant_id,member_id,user=user),
         tenant_summary(tenant_id,member_id),
     )
-    return {"member":member_row,"shares":[serialize(x) for x in shares_row],"passbook":passbook_row,"loans":loans_row,"summary":summary_row}
+    return {"member":member_row,"shares":[serialize(x) for x in shares_row],"passbook":passbook_row,"passbook_has_more":len(passbook_row)==10,"loans":loans_row,"summary":summary_row}
+
+@router.get("/{tenant_id}/members/{member_id}/activity")
+async def member_activity(tenant_id:str,member_id:str,page:int=1,page_size:int=10,user=Depends(current_user)):
+    await tenant_guard(user,tenant_id)
+    if user["role"]=="member" and str(user.get("member_id"))!=member_id: raise HTTPException(403,"Member access denied")
+    page=max(1,page); page_size=max(1,min(page_size,50))
+    rows=await passbook(tenant_id,member_id,page=page,page_size=page_size,user=user)
+    return {"items":rows,"has_more":len(rows)==page_size,"page":page}
 
 @router.get("/{tenant_id}/members/{member_id}/shares")
 async def member_shares(tenant_id:str,member_id:str,user=Depends(current_user)):
@@ -366,9 +394,16 @@ async def _post_bc_penalty_once(tenant_id:str,member_id:str,period:str,payment_d
     if await db.transactions.find_one({"tenant_id":tenant_id,"bc_penalty_key":key}): return None
     return await insert_tx(tenant_id,member_id,"penalty",amount,account,user,date=payment_dt,note=note or f"BC Kist late penalty: {overdue} overdue day(s)",payment_category="bc",penalty_category="bc",bc_regular_kist_penalty=amount,overdue_days=overdue,per_day_penalty=per_day,period=period,bc_penalty_key=key)
 
+async def _feed_upsert(doc, *, source_type="transaction"):
+    db=get_db(); amount=float(doc.get("amount",0) or 0)
+    feed={"source_key":f"{source_type}:{doc.get('_id')}","source_type":source_type,"source_id":str(doc.get("_id")),"transaction_ref":doc.get("transaction_ref"),"tenant_id":doc.get("tenant_id"),"member_id":str(doc.get("member_id")) if doc.get("member_id") else None,"type":doc.get("type","transaction"),"amount":amount,"amount_minor":int(doc.get("amount_minor",round(amount*100)) or 0),"account":doc.get("account","cash"),"date":doc.get("date") or doc.get("created_at"),"created_at":doc.get("created_at") or doc.get("date"),"note":doc.get("note","") or "","payment_category":doc.get("payment_category"),"loan_interest_collected":float(doc.get("loan_interest_collected",doc.get("interest",0)) or 0),"loan_penalty_collected":float(doc.get("loan_penalty_collected",0) or 0),"bc_regular_kist_penalty":float(doc.get("bc_regular_kist_penalty",0) or 0),"interest":float(doc.get("interest",0) or 0),"principal":float(doc.get("principal",0) or 0),"share_no":doc.get("share_no"),"share_id":str(doc.get("share_id")) if doc.get("share_id") else None,"expense_id":str(doc.get("expense_id")) if doc.get("expense_id") else None}
+    await db.financial_feed.update_one({"source_key":feed["source_key"]},{"$set":feed},{"$setOnInsert":{"created_at":feed["created_at"]}},upsert=True)
+
 async def insert_tx(tenant_id,member_id,typ,amount,account,user,**extra):
-    db=get_db(); now=datetime.now(timezone.utc); doc={"tenant_id":tenant_id,"member_id":member_id,"type":typ,"amount":amount,"account":account,"created_at":now,**extra}
+    db=get_db(); now=datetime.now(timezone.utc); normalized=round(float(amount or 0),2); doc={"tenant_id":tenant_id,"member_id":member_id,"type":typ,"amount":normalized,"amount_minor":int(round(normalized*100)),"account":account,"transaction_ref":f"BB-{now.strftime('%Y%m%d')}-{uuid.uuid4().hex[:10].upper()}","created_at":now,**extra}
     r=await db.transactions.insert_one(doc)
+    doc["_id"]=r.inserted_id
+    await _feed_upsert(doc)
     await audit(tenant_id,user,f"{typ.upper()}_POSTED","transaction",str(r.inserted_id),{"amount":amount})
     if member_id and typ != "expense_allocation":
         await _create_notification(tenant_id,role="member",member_id=str(member_id),source_key=f"tx:{r.inserted_id}:{member_id}",title="Account activity",body=f"{str(typ).replace('_',' ').title()} ₹{float(amount):,.2f}.",created_at=extra.get("date",now))
@@ -588,20 +623,36 @@ async def loan_eligibility(tenant_id:str,member_id:str,amount:float|None=None,mo
 
 @router.get("/{tenant_id}/activity")
 async def group_activity(tenant_id:str,page:int=1,page_size:int=10,user=Depends(current_user)):
-    await tenant_guard(user,tenant_id); db=get_db()
-    tx=await db.transactions.find({"tenant_id":tenant_id,"type":{"$ne":"expense_allocation"}}).sort("date",-1).limit(50).to_list(50)
-    ex=await db.expenses.find({"tenant_id":tenant_id}).sort("date",-1).limit(50).to_list(50)
-    rows=[]
-    member_ids={str(x.get("member_id")) for x in tx if x.get("member_id")}
-    members={str(m["_id"]):m for m in await db.members.find({"tenant_id":tenant_id,"_id":{"$in":[parse_oid(v) for v in member_ids if parse_oid(v)]}}).to_list(5000)}
-    for x in tx:
-        mid=str(x.get("member_id")) if x.get("member_id") else ""
-        m=members.get(mid)
-        member_name=f'{m.get("first_name","")} {m.get("last_name","")}'.strip() if m else ""
-        rows.append({"kind":"transaction","type":str(x.get("type","Transaction")).replace("_"," ").title(),"amount":float(x.get("amount",0) or 0),"account":x.get("account","cash"),"date":str(x.get("date",x.get("created_at",""))),"created_at":str(x.get("created_at",x.get("date",""))),"note":x.get("note",""),"member_name":member_name,"member_id":mid,"principal":float(x.get("principal",0) or 0),"interest":float(x.get("interest",0) or 0)})
-    for x in ex:
-        rows.append({"kind":"expense","type":"Expense","amount":-float(x.get("amount",0) or 0),"account":x.get("account","cash"),"date":str(x.get("date",x.get("created_at",""))),"created_at":str(x.get("created_at",x.get("date",""))),"note":x.get("category","")})
-    page=max(1,page); page_size=max(1,min(page_size,100)); ordered=sorted(rows,key=lambda x:(x.get("created_at") or x.get("date") or ""),reverse=True); start=(page-1)*page_size; return ordered[start:start+page_size]
+    """Dashboard activity feed: exactly one MongoDB page of the materialized feed."""
+    await tenant_guard(user,tenant_id); db=get_db(); page=max(1,page); page_size=max(1,min(page_size,50)); q={"tenant_id":tenant_id}
+    if user.get("role")=="member": q["member_id"]=str(user.get("member_id") or "")
+    total=await db.financial_feed.count_documents(q)
+    if total==0:
+        # Safe compatibility fallback while the asynchronous legacy read-model backfill finishes.
+        tx_q={"tenant_id":tenant_id,"type":{"$ne":"expense_allocation"}}; ex_q={"tenant_id":tenant_id}
+        if user.get("role")=="member": tx_q["member_id"]=str(user.get("member_id") or ""); ex_q={"tenant_id":tenant_id,"_id":{"$exists":False}}
+        tx=await db.transactions.find(tx_q).sort([("date",-1),("created_at",-1),("_id",-1)]).limit(page*page_size).to_list(page*page_size)
+        ex=await db.expenses.find(ex_q).sort([("date",-1),("created_at",-1),("_id",-1)]).limit(page*page_size).to_list(page*page_size)
+        rows=[]
+        for x in tx:
+            y=dict(x); y["source_type"]="transaction"; y["source_id"]=str(x["_id"]); rows.append(y)
+        for x in ex:
+            y=dict(x); y["source_type"]="expense"; y["source_id"]=str(x["_id"]); y["type"]="expense"; y["amount"]=-abs(float(x.get("amount",0) or 0)); rows.append(y)
+        rows.sort(key=lambda x:(x.get("date") or x.get("created_at") or "",x.get("created_at") or "",str(x.get("_id"))),reverse=True)
+        total=len(rows); rows=rows[(page-1)*page_size:page*page_size]
+    else:
+        rows=await db.financial_feed.find(q).sort([("date",-1),("created_at",-1),("_id",-1)]).skip((page-1)*page_size).limit(page_size).to_list(page_size)
+    items=[]; mids=[]
+    for x in rows:
+        if x.get("member_id"):
+            try: mids.append(parse_oid(str(x["member_id"])))
+            except Exception: pass
+    docs=await db.members.find({"tenant_id":tenant_id,"_id":{"$in":mids}}).to_list(len(mids) or 1) if mids else []
+    names={str(m["_id"]):f'{m.get("first_name","")} {m.get("last_name","")}'.strip() for m in docs}
+    for x in rows:
+        amount=float(x.get("amount",0) or 0)
+        items.append({"kind":x.get("source_type","transaction"),"id":str(x.get("source_id") or x.get("_id")),"type":str(x.get("type","Transaction")).replace("_"," ").title(),"amount":amount,"account":x.get("account","cash"),"date":str(x.get("date") or x.get("created_at")),"created_at":str(x.get("created_at") or x.get("date")),"note":x.get("note","") or x.get("category","") or "","member_name":names.get(str(x.get("member_id")),""),"member_id":x.get("member_id"),"payment_category":x.get("payment_category")})
+    return {"items":items,"page":page,"page_size":page_size,"has_more":page*page_size<total,"total":total}
 
 @router.get("/{tenant_id}/accounting/{view}")
 async def accounting_view(tenant_id:str, view:str, period:str|None=None, account:str|None=None, filter:str|None=None, page:int=1, page_size:int=10, user=Depends(current_user)):
@@ -618,7 +669,103 @@ async def accounting_view(tenant_id:str, view:str, period:str|None=None, account
     db=get_db()
     tenant=await db.tenants.find_one({"_id":parse_oid(tenant_id)})
     if not tenant: raise HTTPException(404,"Group not found")
-    page=max(1,page); page_size=max(1,min(page_size,5000)); offset=(page-1)*page_size
+    page=max(1,page); page_size=max(1,min(page_size,50)); offset=(page-1)*page_size
+
+    async def _attach_running_balances(rows, base_query, closing_balance):
+        if not rows: return []
+        first=rows[0]; fd=first.get("date"); fc=first.get("created_at"); fid=first.get("_id")
+        newer_net=0.0
+        newer_or=[]
+        if fd is not None: newer_or.append({"date":{"$gt":fd}})
+        if fd is not None and fc is not None: newer_or.append({"date":fd,"created_at":{"$gt":fc}})
+        if fd is not None and fc is not None: newer_or.append({"date":fd,"created_at":fc,"_id":{"$gt":fid}})
+        if newer_or:
+            newer=await db.financial_feed.aggregate([{"$match":{**base_query,"$or":newer_or}},{"$group":{"_id":None,"net":{"$sum":{"$ifNull":["$amount",0]}}}}]).to_list(1)
+            newer_net=float((newer[0] if newer else {}).get("net",0) or 0)
+        balance=round(float(closing_balance)-newer_net,2); out=[]
+        for row in rows:
+            x=dict(row); x["running_balance"]=round(balance,2); balance=round(balance-float(row.get("amount",0) or 0),2); out.append(x)
+        return out
+
+    # Final mobile feed path: MongoDB paginates the materialized financial read model.
+    # This prevents loading/slicing thousands of rows in Python while keeping the
+    # existing response contract intact for the frontend.
+    if view in {"register","profit","expenses","outflows","interest","closing"}:
+        feed={"tenant_id":tenant_id}
+        if view in {"register","closing"}:
+            feed["$or"]=[{"source_type":"expense"},{"source_type":"transaction","type":{"$nin":["expense_allocation","expense"]},"expense_id":{"$exists":False}}]
+            if account: feed["account"]=account
+            if view=="register":
+                direction=(filter or period or "all").lower()
+                if direction=="inflows": feed["amount"]={"$gt":0}
+                elif direction=="outflows": feed["amount"]={"$lt":0}
+            else: direction="closing"
+            agg=await db.financial_feed.aggregate([{"$match":feed},{"$group":{"_id":None,"credits":{"$sum":{"$cond":[{"$gt":["$amount",0]},"$amount",0]}},"debits":{"$sum":{"$cond":[{"$lt":["$amount",0]},{"$abs":"$amount"},0]}},"count":{"$sum":1}}}]).to_list(1)
+            a=agg[0] if agg else {}; credits=round(float(a.get("credits",0) or 0),2); debits=round(float(a.get("debits",0) or 0),2)
+            opening_cash=float(tenant.get("opening_cash",0) or 0); opening_bank=float(tenant.get("opening_bank",0) or 0); opening=(opening_cash+opening_bank) if not account else (opening_cash if account=="cash" else opening_bank)
+            q=feed
+            rows=await db.financial_feed.find(q).sort([("date",-1),("created_at",-1),("_id",-1)]).skip(offset).limit(page_size).to_list(page_size)
+            if view=="closing" or direction=="closing": rows=await _attach_running_balances(rows,q,opening+credits-debits)
+            member_ids=[]
+            for r in rows:
+                if r.get("member_id"):
+                    try: member_ids.append(parse_oid(str(r["member_id"])))
+                    except Exception: pass
+            member_docs=await db.members.find({"tenant_id":tenant_id,"_id":{"$in":member_ids}}).to_list(len(member_ids) or 1) if member_ids else []
+            names={str(m["_id"]):f'{m.get("first_name","")} {m.get("last_name","")}'.strip() for m in member_docs}
+            entries=[]
+            for r in rows:
+                amount=float(r.get("amount",0) or 0); name=names.get(str(r.get("member_id")),"")
+                entries.append({"id":str(r.get("source_id") or r.get("_id")),"date":str(r.get("date") or r.get("created_at")),"member_id":r.get("member_id"),"member_name":name,"type":r.get("type","transaction"),"amount":round(abs(amount),2),"account":r.get("account","cash"),"note":r.get("note","") or r.get("category","") or "","direction":"Credit" if amount>=0 else "Debit","entry_type":"Credit" if amount>=0 else "Debit","payment_category":r.get("payment_category"),"reason":r.get("note","") or r.get("category","") or r.get("type","Transaction"),"running_balance":r.get("running_balance")} )
+            total=int(a.get("count",0) or 0)
+            return {"view":view,"filter":direction,"account":account,"entries":entries,"has_more":offset+len(entries)<total,"total_entries":total,"total_credits":credits,"total_debits":debits,"grand_total":credits if direction=="inflows" else debits if direction=="outflows" else round(credits-debits,2),"opening_balance":round(opening,2),"closing_balance":round(opening+credits-debits,2),"opening_cash":opening_cash,"opening_bank":opening_bank}
+
+        if view=="expenses":
+            feed={"tenant_id":tenant_id,"source_type":"expense"}
+            if account: feed["account"]=account
+            agg=await db.financial_feed.aggregate([{"$match":feed},{"$group":{"_id":None,"total":{"$sum":{"$abs":"$amount"}},"count":{"$sum":1}}}]).to_list(1); a=agg[0] if agg else {}
+            rows=await db.financial_feed.find(feed).sort([("date",-1),("created_at",-1),("_id",-1)]).skip(offset).limit(page_size).to_list(page_size)
+            entries=[{"id":str(r.get("source_id") or r.get("_id")),"date":str(r.get("date") or r.get("created_at")),"category":r.get("category",r.get("note","Expense")),"reason":r.get("note","") or r.get("category","Expense"),"account":r.get("account","cash"),"amount":abs(float(r.get("amount",0) or 0))} for r in rows]
+            total=int(a.get("count",0) or 0); return {"view":view,"entries":entries,"has_more":offset+len(entries)<total,"total_entries":total,"grand_total":round(float(a.get("total",0) or 0),2)}
+
+        if view=="outflows":
+            feed={"tenant_id":tenant_id,"source_type":"transaction","type":{"$in":["loan_disbursement","asset_purchase","asset_outflow","investment_outflow"]}}
+            if account: feed["account"]=account
+            agg=await db.financial_feed.aggregate([{"$match":feed},{"$group":{"_id":None,"total":{"$sum":{"$abs":"$amount"}},"count":{"$sum":1}}}]).to_list(1); a=agg[0] if agg else {}
+            rows=await db.financial_feed.find(feed).sort([("date",-1),("created_at",-1),("_id",-1)]).skip(offset).limit(page_size).to_list(page_size)
+            entries=[{"id":str(r.get("source_id") or r.get("_id")),"date":str(r.get("date") or r.get("created_at")),"member_id":r.get("member_id"),"member_name":"","type":r.get("type",""),"amount":abs(float(r.get("amount",0) or 0)),"account":r.get("account","cash"),"note":r.get("note",""),"outflow_type":"Loan Disbursement" if r.get("type")=="loan_disbursement" else "Asset / Investment"} for r in rows]
+            total=int(a.get("count",0) or 0); return {"view":view,"account":account,"entries":entries,"has_more":offset+len(entries)<total,"total_entries":total,"grand_total":round(float(a.get("total",0) or 0),2)}
+
+        # Profit / interest are derived from the transaction read model, with
+        # totals aggregated in MongoDB and only the visible 10 rows materialized.
+        if view=="profit":
+            feed={"tenant_id":tenant_id,"source_type":"transaction","$or":[{"loan_interest_collected":{"$gt":0}},{"loan_penalty_collected":{"$gt":0}},{"bc_regular_kist_penalty":{"$gt":0}},{"type":"penalty"}]}
+            rows=await db.financial_feed.find(feed).sort([("date",-1),("created_at",-1),("_id",-1)]).skip(offset).limit(page_size).to_list(page_size)
+            profit_expr={"$add":[{"$ifNull":["$loan_interest_collected",0]},{"$ifNull":["$loan_penalty_collected",0]},{"$ifNull":["$bc_regular_kist_penalty",0]}]}
+            # Legacy penalty rows may not have one of the explicit fields.
+            legacy_penalty={"$cond":[{"$and":[{"$eq":["$type","penalty"]},{"$eq":[{"$ifNull":["$loan_penalty_collected",0]},0]},{"$eq":[{"$ifNull":["$bc_regular_kist_penalty",0]},0]}]}, {"$abs":{"$ifNull":["$amount",0]}}, 0]}
+            profit_expr={"$add":[profit_expr,legacy_penalty]}
+            totals=await db.financial_feed.aggregate([{"$match":feed},{"$group":{"_id":None,"grand":{"$sum":profit_expr},"loan_interest":{"$sum":{"$ifNull":["$loan_interest_collected",0]}},"loan_penalties":{"$sum":{"$ifNull":["$loan_penalty_collected",0]}},"bc_penalties":{"$sum":{"$add":[{"$ifNull":["$bc_regular_kist_penalty",0]},legacy_penalty]}},"count":{"$sum":1}}}]).to_list(1)
+            a=totals[0] if totals else {}; entries=[]
+            for r in rows:
+                li=float(r.get("loan_interest_collected",0) or 0); lp=float(r.get("loan_penalty_collected",0) or 0); bp=float(r.get("bc_regular_kist_penalty",0) or 0)
+                if r.get("type")=="penalty" and not (li or lp or bp): bp=abs(float(r.get("amount",0) or 0))
+                amount=li+lp+bp
+                entries.append({"id":str(r.get("source_id") or r.get("_id")),"date":str(r.get("date") or r.get("created_at")),"member_name":"","type":r.get("type","profit"),"amount":round(amount,2),"account":r.get("account","cash"),"source":"Loan Interest" if li else "Loan Penalty" if lp else "BC Penalty","reason":r.get("note","")})
+            total=int(a.get("count",0) or 0); src={"loan_interest":float(a.get("loan_interest",0) or 0),"bc_penalties":float(a.get("bc_penalties",0) or 0),"loan_penalties":float(a.get("loan_penalties",0) or 0)}
+            return {"view":view,"entries":entries,"has_more":offset+len(entries)<total,"total_entries":total,"grand_total":round(float(a.get("grand",0) or 0),2),"sources":{k:round(v,2) for k,v in src.items()}}
+
+        if view=="interest":
+            feed={"tenant_id":tenant_id,"source_type":"transaction","$or":[{"type":"interest","amount":{"$gt":0}},{"type":"loan_repayment","loan_interest_collected":{"$gt":0}}]}
+            rows=await db.financial_feed.find(feed).sort([("date",-1),("created_at",-1),("_id",-1)]).skip(offset).limit(page_size).to_list(page_size)
+            amount_expr={"$cond":[{"$eq":["$type","loan_repayment"]},{"$ifNull":["$loan_interest_collected",0]},{"$ifNull":["$amount",0]}]}
+            totals=await db.financial_feed.aggregate([{"$match":feed},{"$group":{"_id":None,"total":{"$sum":amount_expr},"count":{"$sum":1}}}]).to_list(1); a=totals[0] if totals else {}
+            entries=[]
+            for r in rows:
+                amount=float(r.get("loan_interest_collected",0) or 0) if r.get("type")=="loan_repayment" else float(r.get("amount",0) or 0)
+                entries.append({"id":str(r.get("source_id") or r.get("_id")),"date":str(r.get("date") or r.get("created_at")),"member_name":"","type":r.get("type","interest"),"amount":round(amount,2),"account":r.get("account","cash"),"source":"Member Loan Interest" if r.get("type")=="loan_repayment" else "Bank / Other Interest"})
+            total=int(a.get("count",0) or 0)
+            return {"view":view,"entries":entries,"has_more":offset+len(entries)<total,"total_entries":total,"grand_total":round(float(a.get("total",0) or 0),2)}
 
     if view=="active-loans":
         rows=await db.loans.find({"tenant_id":tenant_id,"status":"active"}).sort("created_at",-1).to_list(5000)
@@ -782,9 +929,39 @@ async def register_overview(tenant_id:str,user=Depends(current_user)):
 
 @router.get("/{tenant_id}/ledger-overview")
 async def ledger_overview(tenant_id:str,user=Depends(current_user)):
-    await tenant_guard(user,tenant_id)
-    member_rows, tx_rows, loan_rows = await asyncio.gather(members(tenant_id,user=user), transactions(tenant_id,user=user), loans(tenant_id,user=user))
-    return {"members":member_rows,"transactions":tx_rows,"loans":loan_rows}
+    """Member ledger read model.
+
+    The UI no longer downloads thousands of transactions just to calculate one
+    card per member. MongoDB calculates the member-level aggregates and the
+    transaction feed remains independently paginated.
+    """
+    await tenant_guard(user,tenant_id); db=get_db()
+    member_rows=await members(tenant_id,user=user)
+    member_ids=[str(m["_id"]) for m in member_rows]
+    contribution_rows=await db.transactions.aggregate([
+        {"$match":{"tenant_id":tenant_id,"member_id":{"$in":member_ids},"type":"contribution"}},
+        {"$group":{"_id":"$member_id","savings":{"$sum":{"$convert":{"input":{"$ifNull":["$amount",0]},"to":"double","onError":0,"onNull":0}}},"transactions":{"$sum":1}}}
+    ]).to_list(None) if member_ids else []
+    loan_rows=await db.loans.find({"tenant_id":tenant_id,"member_id":{"$in":member_ids}}).sort("created_at",-1).to_list(5000) if member_ids else []
+    loan_by_member={}
+    for loan in loan_rows:
+        if loan.get("status")!="active": continue
+        mid=str(loan.get("member_id")); bucket=loan_by_member.setdefault(mid,{"principal":0.0,"interest":0.0,"loans":0})
+        bucket["principal"]+=max(0,float(loan.get("principal",0) or 0)-float(loan.get("principal_paid",0) or 0))
+        bucket["interest"]+=max(0,float(loan.get("interest_accrued",loan.get("expected_interest",0)) or 0)-float(loan.get("interest_paid",0) or 0))
+        bucket["loans"]+=1
+    contrib_by_member={str(x["_id"]):x for x in contribution_rows}
+    now=datetime.now(timezone.utc); month_start=datetime(now.year,now.month,1,tzinfo=timezone.utc); month_end=datetime(now.year+1,1,1,tzinfo=timezone.utc) if now.month==12 else datetime(now.year,now.month+1,1,tzinfo=timezone.utc)
+    kist_rows=await db.transactions.aggregate([
+        {"$match":{"tenant_id":tenant_id,"member_id":{"$in":member_ids},"type":"contribution","date":{"$gte":month_start,"$lt":month_end}}},
+        {"$group":{"_id":"$member_id","count":{"$sum":1}}}
+    ]).to_list(None) if member_ids else []
+    kist_by_member={str(x["_id"]):int(x.get("count",0) or 0) for x in kist_rows}
+    member_ledgers=[]
+    for m in member_rows:
+        mid=str(m["_id"]); c=contrib_by_member.get(mid,{}) ; l=loan_by_member.get(mid,{})
+        member_ledgers.append({"member_id":mid,"savings":round(float(c.get("savings",0) or 0),2),"transaction_count":int(c.get("transactions",0) or 0),"principal":round(float(l.get("principal",0) or 0),2),"interest":round(float(l.get("interest",0) or 0),2),"active_loans":int(l.get("loans",0) or 0),"kist_paid":kist_by_member.get(mid,0)>0})
+    return {"members":member_rows,"member_ledgers":member_ledgers,"loans":[serialize(x) for x in loan_rows]}
 
 @router.get("/{tenant_id}/loans-overview")
 async def loans_overview(tenant_id:str,user=Depends(current_user)):
@@ -800,7 +977,7 @@ async def personal_loan_overview(tenant_id:str,user=Depends(current_user)):
     return {"loans":loan_rows,"requests":request_rows}
 
 @router.get("/{tenant_id}/transactions")
-async def transactions(tenant_id:str,from_date:date|None=None,to_date:date|None=None,typ:str|None=None,page:int=1,page_size:int=5000,user=Depends(current_user)):
+async def transactions(tenant_id:str,from_date:date|None=None,to_date:date|None=None,typ:str|None=None,page:int=1,page_size:int=10,user=Depends(current_user)):
     await tenant_guard(user,tenant_id); q={"tenant_id":tenant_id}
     if user["role"]=="member":
         q["member_id"]=str(user.get("member_id"))
@@ -827,17 +1004,34 @@ async def create_loan(tenant_id:str,body:LoanCreate,user=Depends(admin_user)):
     rate=body.interest_rate if body.interest_rate is not None else float(tenant.get("loan_interest_rate_per_month",2) or 0); interest=round(body.principal*rate/100*body.months,2)
     start_dt=datetime.combine(body.date or date.today(),datetime.min.time(),tzinfo=timezone.utc)
     loan={"tenant_id":tenant_id,"member_id":body.member_id,"principal":body.principal,"interest_rate":rate,"months":body.months,"expected_interest":interest,"interest_accrued":0.0,"principal_paid":0.0,"interest_paid":0.0,"loan_interest_collected":0.0,"loan_penalty_collected":0.0,"principal_repaid":0.0,"status":"active","purpose":body.purpose,"account":body.account,"created_at":now,"start_date":start_dt,"last_interest_accrual_month":start_dt.strftime("%Y-%m"),"loan_due_date":int(tenant.get("loan_due_date",10) or 10)}
+    loan["principal_minor"]=int(round(float(body.principal)*100)); loan["expected_interest_minor"]=int(round(float(interest)*100))
     r=await db.loans.insert_one(loan)
     await insert_tx(tenant_id,body.member_id,"loan_disbursement",-body.principal,body.account,user,loan_id=str(r.inserted_id),date=start_dt,note=body.purpose,principal=-body.principal)
     await audit(tenant_id,user,"LOAN_CREATED","loan",str(r.inserted_id),{"principal":body.principal,"credit_limit":limit})
     return {"id":str(r.inserted_id),"credit_limit":limit,"total_interest":interest,"total_due":round(body.principal+interest,2)}
 
 @router.get("/{tenant_id}/loans")
-async def loans(tenant_id:str,member_id:str|None=None,user=Depends(current_user)):
-    await tenant_guard(user,tenant_id); q={"tenant_id":tenant_id}
+async def loans(tenant_id:str,member_id:str|None=None,user=Depends(current_user),page:int|None=None,page_size:int=10):
+    await tenant_guard(user,tenant_id); db=get_db(); q={"tenant_id":tenant_id}
     if user["role"]=="member": q["member_id"]=str(user.get("member_id"))
     elif member_id: q["member_id"]=member_id
-    rows=await get_db().loans.find(q).sort("created_at",-1).to_list(5000); return [serialize(x) for x in rows]
+    if page is None:
+        rows=await db.loans.find(q).sort("created_at",-1).to_list(5000); return [serialize(x) for x in rows]
+    page=max(1,page); page_size=max(1,min(page_size,50)); rows=await db.loans.find(q).sort([("created_at",-1),("_id",-1)]).skip((page-1)*page_size).limit(page_size).to_list(page_size)
+    mids=[]
+    for x in rows:
+        if x.get("member_id"):
+            try: mids.append(parse_oid(str(x["member_id"])))
+            except Exception: pass
+    docs=await db.members.find({"tenant_id":tenant_id,"_id":{"$in":mids}}).to_list(len(mids) or 1) if mids else []
+    names={str(m["_id"]):f'{m.get("first_name","")} {m.get("last_name","")}'.strip() for m in docs}
+    items=[]
+    for x in rows:
+        item=serialize(x); item["member_name"]=names.get(str(x.get("member_id")),"Member"); items.append(item)
+    total=await db.loans.count_documents(q); active_q={**q,"status":"active"}; active_count=await db.loans.count_documents(active_q)
+    totals=await db.loans.aggregate([{"$match":q},{"$group":{"_id":None,"principal":{"$sum":{"$convert":{"input":{"$ifNull":["$principal",0]},"to":"double","onError":0,"onNull":0}}},"outstanding":{"$sum":{"$subtract":[{"$convert":{"input":{"$ifNull":["$principal",0]},"to":"double","onError":0,"onNull":0}},{"$convert":{"input":{"$ifNull":["$principal_paid",0]},"to":"double","onError":0,"onNull":0}}]}}}}]).to_list(1)
+    t=totals[0] if totals else {}
+    return {"items":items,"page":page,"page_size":page_size,"total":total,"active_count":active_count,"total_principal":round(float(t.get("principal",0) or 0),2),"total_outstanding":round(float(t.get("outstanding",0) or 0),2),"has_more":page*page_size<total}
 
 @router.get("/{tenant_id}/group-loans")
 async def group_loans(tenant_id:str,user=Depends(current_user)):
@@ -955,7 +1149,7 @@ async def ensure_expense_allocations(tenant_id:str,expense_doc):
             {"$setOnInsert":{
                 "tenant_id":tenant_id,"member_id":str(share["member_id"]),"share_id":str(share["_id"]),
                 "share_no":int(share["share_no"]),"expense_id":str(expense_doc["_id"]),"type":"expense_allocation",
-                "amount":-amount,"account":expense_doc.get("account","cash"),"date":expense_doc.get("date"),
+                "amount":-amount,"amount_minor":-int(round(amount*100)),"account":expense_doc.get("account","cash"),"date":expense_doc.get("date"),
                 "created_at":expense_doc.get("created_at",datetime.now(timezone.utc)),
                 "payment_category":"group_expense_allocation","note":expense_doc.get("category", "Group expense")
             }},upsert=True))
@@ -966,7 +1160,10 @@ async def expense(tenant_id:str,body:ExpenseCreate,user=Depends(admin_user)):
     await tenant_guard(user,tenant_id); db=get_db(); now=datetime.now(timezone.utc); dt=datetime.combine(body.date or date.today(),datetime.min.time(),tzinfo=timezone.utc)
     if not await db.expense_categories.find_one({"tenant_id":tenant_id,"name":body.category}):
         await db.expense_categories.insert_one({"tenant_id":tenant_id,"name":body.category,"created_at":now})
-    r=await db.expenses.insert_one({**body.model_dump(),"tenant_id":tenant_id,"date":dt,"created_at":now,"proof_url":None,"proof_public_id":None})
+    expense_doc={**body.model_dump(),"tenant_id":tenant_id,"date":dt,"created_at":now,"proof_url":None,"proof_public_id":None,"amount_minor":int(round(float(body.amount)*100))}
+    r=await db.expenses.insert_one(expense_doc)
+    expense_doc["_id"]=r.inserted_id
+    await _feed_upsert(expense_doc,source_type="expense")
     created=await db.expenses.find_one({"_id":r.inserted_id})
     await ensure_expense_allocations(tenant_id,created)
     await audit(tenant_id,user,"EXPENSE_CREATED","expense",str(r.inserted_id),{"amount":body.amount})
@@ -974,8 +1171,13 @@ async def expense(tenant_id:str,body:ExpenseCreate,user=Depends(admin_user)):
     return {"id":str(r.inserted_id)}
 
 @router.get("/{tenant_id}/expenses")
-async def expenses(tenant_id:str,user=Depends(admin_user)):
-    await tenant_guard(user,tenant_id); rows=await get_db().expenses.find({"tenant_id":tenant_id}).sort("date",-1).to_list(5000); return [serialize(x) for x in rows]
+async def expenses(tenant_id:str,user=Depends(admin_user),page:int|None=None,page_size:int=10):
+    await tenant_guard(user,tenant_id); db=get_db(); q={"tenant_id":tenant_id}
+    if page is None:
+        rows=await db.expenses.find(q).sort("date",-1).to_list(5000); return [serialize(x) for x in rows]
+    page=max(1,page); page_size=max(1,min(page_size,50)); rows=await db.expenses.find(q).sort([("date",-1),("created_at",-1),("_id",-1)]).skip((page-1)*page_size).limit(page_size).to_list(page_size); total=await db.expenses.count_documents(q)
+    agg=await db.expenses.aggregate([{"$match":q},{"$group":{"_id":None,"total":{"$sum":{"$convert":{"input":{"$ifNull":["$amount",0]},"to":"double","onError":0,"onNull":0}}}}}]).to_list(1); grand=float((agg[0] if agg else {}).get("total",0) or 0)
+    return {"items":[serialize(x) for x in rows],"page":page,"page_size":page_size,"total":total,"grand_total":round(grand,2),"has_more":page*page_size<total}
 
 @router.get("/{tenant_id}/expense-categories")
 async def expense_categories(tenant_id:str,user=Depends(admin_user)):
@@ -1008,12 +1210,10 @@ async def delete_expense_proof(tenant_id:str,expense_id:str,user=Depends(admin_u
     await db.expenses.update_one({"_id":exp["_id"]},{"$set":{"proof_url":None,"proof_public_id":None}}); await audit(tenant_id,user,"EXPENSE_PROOF_DELETED","expense",expense_id); return {"ok":True}
 
 @router.get("/{tenant_id}/passbook/{member_id}")
-async def passbook(tenant_id:str,member_id:str,from_date:date|None=None,to_date:date|None=None,share_no:int|None=None,account:str|None=None,book:str|None=None,page:int=1,page_size:int=5000,user=Depends(current_user)):
+async def passbook(tenant_id:str,member_id:str,from_date:date|None=None,to_date:date|None=None,share_no:int|None=None,account:str|None=None,book:str|None=None,page:int=1,page_size:int=10,user=Depends(current_user)):
     await tenant_guard(user,tenant_id)
-    if user["role"]=="group_admin" and str(user.get("member_id"))==member_id:
-        pass
     if user["role"]=="member" and str(user.get("member_id"))!=member_id: raise HTTPException(403,"Member access denied")
-    await get_member(get_db(),tenant_id,member_id); q={"tenant_id":tenant_id,"member_id":member_id}
+    await get_member(get_db(),tenant_id,member_id); db=get_db(); q={"tenant_id":tenant_id,"member_id":member_id}
     if from_date or to_date:
         q["date"]={}
         if from_date:q["date"]["$gte"]=datetime.combine(from_date,datetime.min.time(),tzinfo=timezone.utc)
@@ -1022,17 +1222,58 @@ async def passbook(tenant_id:str,member_id:str,from_date:date|None=None,to_date:
     if account:q["account"]=account
     if book=="expense":q["type"]="expense_allocation"
     elif book in ("bank","cash"):q["account"]=book
-    # Expense allocations are created when an expense is posted. Never perform
-    # a tenant-wide backfill from a read endpoint: older code turned every
-    # passbook open into N+1 MongoDB writes. A one-time deployment backfill (if
-    # needed) is handled separately; normal reads stay strictly read-only.
-    page=max(1,page); page_size=max(1,min(page_size,5000))
-    rows=await get_db().transactions.find(q).sort([("date",1),("created_at",1),("_id",1)]).to_list(10000); balance=0; out=[]
-    for r in rows:
-        balance+=float(r.get("amount",0)); x=serialize(r); x["running_balance"]=round(balance,2); out.append(x)
-    out.reverse()
-    start=(page-1)*page_size; return out[start:start+page_size]
+    page=max(1,page); page_size=max(1,min(page_size,50)); skip=(page-1)*page_size
+    sort=[("date",-1),("created_at",-1),("_id",-1)]
+    rows=await db.transactions.find(q).sort(sort).skip(skip).limit(page_size).to_list(page_size)
+    if not rows: return []
+    # Running balance is server-authoritative and page-independent.  Compute the
+    # complete filtered sum plus the amount belonging to records newer than the
+    # first row on this page; then walk this page from newest to oldest.
+    total_rows=await db.transactions.aggregate([{"$match":q},{"$group":{"_id":None,"total":{"$sum":{"$convert":{"input":{"$ifNull":["$amount",0]},"to":"double","onError":0,"onNull":0}}},"count":{"$sum":1}}}]).to_list(1)
+    total=float((total_rows[0] if total_rows else {}).get("total",0) or 0)
+    first=rows[0]; newer=0.0
+    if skip>0:
+        fd=first.get("date"); fc=first.get("created_at"); fid=first.get("_id")
+        newer_q={"$or":[]}
+        if fd is not None:newer_q["$or"].append({"date":{"$gt":fd}})
+        if fd is not None and fc is not None:newer_q["$or"].append({"date":fd,"created_at":{"$gt":fc}})
+        if fd is not None and fc is not None:newer_q["$or"].append({"date":fd,"created_at":fc,"_id":{"$gt":fid}})
+        if newer_q["$or"]:
+            newer_rows=await db.transactions.aggregate([{"$match":{**q,**newer_q}},{"$group":{"_id":None,"total":{"$sum":{"$convert":{"input":{"$ifNull":["$amount",0]},"to":"double","onError":0,"onNull":0}}}}}]).to_list(1)
+            newer=float((newer_rows[0] if newer_rows else {}).get("total",0) or 0)
+    balance=round(total-newer,2); out=[]
+    for row in rows:
+        x=serialize(row); amount=float(row.get("amount",0) or 0); balance=round(balance,2); x["running_balance"]=balance; out.append(x); balance=round(balance-amount,2)
+    return out
+
+@router.get("/{tenant_id}/passbook-summary/{member_id}")
+async def passbook_summary(tenant_id:str,member_id:str,from_date:date|None=None,to_date:date|None=None,share_no:int|None=None,account:str|None=None,book:str|None=None,user=Depends(current_user)):
+    """Summary is calculated independently of the paginated transaction feed."""
+    await tenant_guard(user,tenant_id)
+    if user["role"]=="member" and str(user.get("member_id"))!=member_id: raise HTTPException(403,"Member access denied")
+    await get_member(get_db(),tenant_id,member_id); db=get_db(); q={"tenant_id":tenant_id,"member_id":member_id}
+    if from_date or to_date:
+        q["date"]={}
+        if from_date:q["date"]["$gte"]=datetime.combine(from_date,datetime.min.time(),tzinfo=timezone.utc)
+        if to_date:q["date"]["$lte"]=datetime.combine(to_date,datetime.max.time(),tzinfo=timezone.utc)
+    if share_no:q["share_no"]=share_no
+    if account:q["account"]=account
+    if book=="expense":q["type"]="expense_allocation"
+    elif book in ("bank","cash"):q["account"]=book
+    agg=await db.transactions.aggregate([{"$match":q},{"$group":{"_id":None,"credits":{"$sum":{"$cond":[{"$gt":[{"$convert":{"input":{"$ifNull":["$amount",0]},"to":"double","onError":0,"onNull":0}},0]},{"$convert":{"input":{"$ifNull":["$amount",0]},"to":"double","onError":0,"onNull":0}},0]}},"debits":{"$sum":{"$cond":[{"$lt":[{"$convert":{"input":{"$ifNull":["$amount",0]},"to":"double","onError":0,"onNull":0}},0]},{"$abs":{"$convert":{"input":{"$ifNull":["$amount",0]},"to":"double","onError":0,"onNull":0}}},0]}},"net":{"$sum":{"$convert":{"input":{"$ifNull":["$amount",0]},"to":"double","onError":0,"onNull":0}}},"count":{"$sum":1}}}]).to_list(1)
+    row=agg[0] if agg else {}
+    opening=0.0
+    if from_date:
+        before=dict(q); before.pop("date",None); before["date"]={"$lt":datetime.combine(from_date,datetime.min.time(),tzinfo=timezone.utc)}
+        before_row=await db.transactions.aggregate([{"$match":before},{"$group":{"_id":None,"net":{"$sum":{"$convert":{"input":{"$ifNull":["$amount",0]},"to":"double","onError":0,"onNull":0}}}}}]).to_list(1)
+        opening=float((before_row[0] if before_row else {}).get("net",0) or 0)
+    net=float(row.get("net",0) or 0)
+    return {"opening_balance":round(opening,2),"total_credits":round(float(row.get("credits",0) or 0),2),"total_debits":round(float(row.get("debits",0) or 0),2),"closing_balance":round(opening+net,2),"transaction_count":int(row.get("count",0) or 0)}
 
 @router.get("/{tenant_id}/audit")
-async def audit_logs(tenant_id:str,user=Depends(require_roles("super_admin"))):
-    await tenant_guard(user,tenant_id); rows=await get_db().audit_logs.find({"tenant_id":tenant_id}).sort("created_at",-1).to_list(5000); return [serialize(x) for x in rows]
+async def audit_logs(tenant_id:str,user=Depends(require_roles("super_admin")),page:int|None=None,page_size:int=10):
+    await tenant_guard(user,tenant_id); db=get_db(); q={"tenant_id":tenant_id}
+    if page is None:
+        rows=await db.audit_logs.find(q).sort("created_at",-1).to_list(5000); return [serialize(x) for x in rows]
+    page=max(1,page); page_size=max(1,min(page_size,50)); rows=await db.audit_logs.find(q).sort([("created_at",-1),("_id",-1)]).skip((page-1)*page_size).limit(page_size).to_list(page_size); total=await db.audit_logs.count_documents(q)
+    return {"items":[serialize(x) for x in rows],"page":page,"page_size":page_size,"total":total,"has_more":page*page_size<total}

@@ -2,7 +2,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from .db import connect_db, close_db, get_db
+from .db import connect_db, close_db, get_db, backfill_financial_feed
 from .services import backfill_legacy_expense_allocations
 from .core.config import settings
 from .core.security import hash_password
@@ -26,6 +26,7 @@ async def lifespan(app: FastAPI):
         })
     import asyncio
     asyncio.create_task(backfill_legacy_expense_allocations())
+    asyncio.create_task(backfill_financial_feed())
     yield
     await close_db()
 
