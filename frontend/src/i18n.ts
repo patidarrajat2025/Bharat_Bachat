@@ -340,3 +340,8 @@ Object.assign(hi,{"Asset / Loan Outflow":"संपत्ति / ऋण नि�
 Object.assign(en,{"Asset / Loan Outflow":"Asset / Loan Outflow"});
 i18n.addResourceBundle('hi','translation',hi,true,true);
 i18n.addResourceBundle('en','translation',en,true,true);
+
+Object.assign(hi,{"Statement":"विवरण","ledger entries":"लेजर प्रविष्टियाँ","Account opening balance":"खाते का शुरुआती शेष","Reconciliation":"मिलान"});
+Object.assign(en,{"Statement":"Statement","ledger entries":"ledger entries","Account opening balance":"Account opening balance","Reconciliation":"Reconciliation"});
+i18n.addResourceBundle('hi','translation',hi,true,true);
+i18n.addResourceBundle('en','translation',en,true,true);

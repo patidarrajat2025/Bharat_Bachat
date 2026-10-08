@@ -2,7 +2,7 @@ from datetime import datetime, timezone, date
 import asyncio
 import uuid
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
-from ..db import get_db
+from ..db import get_db, backfill_financial_feed
 from ..deps import current_user, tenant_guard, require_roles, parse_oid
 from ..models import *
 from ..services import tenant_summary, analytics
@@ -13,6 +13,26 @@ from ..core.security import hash_password, normalize_phone
 from ..share_service import ensure_member_shares
 
 router=APIRouter(prefix="/group",tags=["group"])
+
+# Financial-feed repair is lazy and only runs when the materialized ledger is
+# behind the source collections. This keeps startup fast while guaranteeing that
+# ledger drill-downs never show empty/zero data just because the background
+# backfill has not finished yet.
+_feed_repair_lock=asyncio.Lock()
+
+async def ensure_financial_feed_ready(tenant_id: str):
+    db=get_db()
+    tx_count=await db.transactions.count_documents({"tenant_id":tenant_id})
+    expense_count=await db.expenses.count_documents({"tenant_id":tenant_id})
+    feed_count=await db.financial_feed.count_documents({"tenant_id":tenant_id})
+    if feed_count >= tx_count + expense_count:
+        return
+    async with _feed_repair_lock:
+        tx_count=await db.transactions.count_documents({"tenant_id":tenant_id})
+        expense_count=await db.expenses.count_documents({"tenant_id":tenant_id})
+        feed_count=await db.financial_feed.count_documents({"tenant_id":tenant_id})
+        if feed_count < tx_count + expense_count:
+            await backfill_financial_feed()
 
 def as_id(v): return str(v)
 async def admin_user(user=Depends(current_user)):
@@ -669,6 +689,10 @@ async def accounting_view(tenant_id:str, view:str, period:str|None=None, account
     db=get_db()
     tenant=await db.tenants.find_one({"_id":parse_oid(tenant_id)})
     if not tenant: raise HTTPException(404,"Group not found")
+    # Never let a newly deployed/read-model-backed ledger race its background
+    # backfill. If source documents exist without matching feed rows, repair
+    # the read model before calculating any counts, balances or drill-down rows.
+    await ensure_financial_feed_ready(tenant_id)
     page=max(1,page); page_size=max(1,min(page_size,50)); offset=(page-1)*page_size
 
     async def _attach_running_balances(rows, base_query, closing_balance):
@@ -725,7 +749,7 @@ async def accounting_view(tenant_id:str, view:str, period:str|None=None, account
             total=await db.financial_feed.count_documents(q)
             display_credits=round(sum(float(r.get("amount",0) or 0) for r in rows if float(r.get("amount",0) or 0)>0),2)
             display_debits=round(sum(abs(float(r.get("amount",0) or 0)) for r in rows if float(r.get("amount",0) or 0)<0),2)
-            return {"view":view,"filter":direction,"account":account,"entries":entries,"has_more":offset+len(entries)<total,"total_entries":total,"total_credits":credits,"total_debits":debits,"grand_total":display_credits if direction=="inflows" else display_debits if direction=="outflows" else round(credits-debits,2),"opening_balance":round(opening,2),"closing_balance":round(opening+credits-debits,2),"opening_cash":opening_cash,"opening_bank":opening_bank}
+            return {"view":view,"filter":direction,"account":account,"account_label":("Bank Deposit" if account=="bank" else "Cash Deposit" if account=="cash" else "Group Active Account Balance"),"entries":entries,"has_more":offset+len(entries)<total,"total_entries":total,"total_credits":credits,"total_debits":debits,"grand_total":display_credits if direction=="inflows" else display_debits if direction=="outflows" else round(credits-debits,2),"opening_balance":round(opening,2),"closing_balance":round(opening+credits-debits,2),"opening_cash":opening_cash,"opening_bank":opening_bank}
 
         if view=="expenses":
             feed={"tenant_id":tenant_id,"source_type":"expense"}
