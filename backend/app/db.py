@@ -62,10 +62,15 @@ async def create_indexes():
     # Existing records remain backward-compatible and are normalized lazily by
     # read models; no destructive migration is performed at application startup.
     await d.transactions.create_index([("tenant_id", 1), ("amount_minor", 1)])
-    await d.transactions.create_index([("tenant_id", 1), ("idempotency_key", 1)], unique=True, partialFilterExpression={"idempotency_key":{"$type":"string","$ne":""}}, name="tenant_transaction_idempotency_unique")
-    await d.loans.create_index([("tenant_id", 1), ("idempotency_key", 1)], unique=True, partialFilterExpression={"idempotency_key":{"$type":"string","$ne":""}}, name="tenant_loan_idempotency_unique")
-    await d.loan_requests.create_index([("tenant_id", 1), ("idempotency_key", 1)], unique=True, partialFilterExpression={"idempotency_key":{"$type":"string","$ne":""}}, name="tenant_loan_request_idempotency_unique")
-    await d.expenses.create_index([("tenant_id", 1), ("idempotency_key", 1)], unique=True, partialFilterExpression={"idempotency_key":{"$type":"string","$ne":""}}, name="tenant_expense_idempotency_unique")
+    # MongoDB partial indexes support $type here, but not $ne. Remove legacy
+    # empty-string placeholders before building the unique indexes; missing/null
+    # keys remain outside the partial index, while every real string key is unique.
+    for collection in (d.transactions, d.loans, d.loan_requests, d.expenses):
+        await collection.update_many({"idempotency_key": ""}, {"$unset": {"idempotency_key": ""}})
+    await d.transactions.create_index([("tenant_id", 1), ("idempotency_key", 1)], unique=True, partialFilterExpression={"idempotency_key":{"$type":"string"}}, name="tenant_transaction_idempotency_unique")
+    await d.loans.create_index([("tenant_id", 1), ("idempotency_key", 1)], unique=True, partialFilterExpression={"idempotency_key":{"$type":"string"}}, name="tenant_loan_idempotency_unique")
+    await d.loan_requests.create_index([("tenant_id", 1), ("idempotency_key", 1)], unique=True, partialFilterExpression={"idempotency_key":{"$type":"string"}}, name="tenant_loan_request_idempotency_unique")
+    await d.expenses.create_index([("tenant_id", 1), ("idempotency_key", 1)], unique=True, partialFilterExpression={"idempotency_key":{"$type":"string"}}, name="tenant_expense_idempotency_unique")
     await d.operation_locks.create_index("operation_key", unique=True, name="operation_lock_unique")
     await d.operation_locks.create_index("expires_at", expireAfterSeconds=0, name="operation_lock_ttl")
     await d.transactions.create_index([("tenant_id", 1), ("transaction_ref", 1)], unique=True, sparse=True)
