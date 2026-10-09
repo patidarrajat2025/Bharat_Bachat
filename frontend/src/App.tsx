@@ -4,7 +4,7 @@ import {Navigate,Route,Routes,useLocation,useNavigate,useParams,useNavigationTyp
 import {useTranslation} from 'react-i18next';
 import {tr, appLocale, currentLanguage} from './i18n';
 import {Area,AreaChart,CartesianGrid,ResponsiveContainer,Tooltip,XAxis,YAxis,Bar,BarChart,ComposedChart,Line,LineChart} from 'recharts';
-import {Banknote,Building2,CheckCircle2,ChevronDown,ChevronRight,ClipboardList,Download,Eye,EyeOff,IndianRupee,LockKeyhole,MoreVertical,Plus,Receipt,ShieldCheck,TrendingUp,Upload,Users,Wallet,XCircle,ArrowDownToLine,ArrowUpFromLine,Settings,Palette,Sun,Moon,Bell,UserRound,ArrowLeft,CalendarDays,Landmark} from 'lucide-react';
+import {Banknote,Building2,CheckCircle2,ChevronDown,ChevronRight,ClipboardList,Download,Eye,EyeOff,IndianRupee,LockKeyhole,MoreVertical,Plus,Receipt,ShieldCheck,TrendingUp,Upload,Users,Wallet,XCircle,ArrowDownToLine,ArrowUpFromLine,Settings,Palette,Sun,Moon,Bell,UserRound,ArrowLeft,CalendarDays,Landmark,X} from 'lucide-react';
 import {api} from './api'; import {useStore} from './store'; import type {Member,Loan,Transaction,Tenant,Share} from './types';
 import {ActionSheet,ActivityAccordion,ErrorBox,Field,LanguageToggle,Layout,ListCard,Logo,Modal,PageTitle,Pagination,SearchField,SelectField,StatCard,TextArea,InstallBanner} from './components';
 
