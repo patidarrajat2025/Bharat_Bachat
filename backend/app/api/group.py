@@ -547,7 +547,9 @@ async def monthly_kist_summary(tenant_id:str,period:str,user=Depends(current_use
     tenant=await db.tenants.find_one({"_id":parse_oid(tenant_id)})
     expected_per_share=float((tenant or {}).get("kist_per_share",500))
     members=await db.members.find({"tenant_id":tenant_id,"active":True}).sort("first_name",1).to_list(5000)
-    if user["role"]=="member": members=[m for m in members if str(m["_id"])==str(user.get("member_id"))]
+    # Dashboard status cards are intentionally group-wide for every role so
+    # member and admin dashboards share the same totals. Personal amounts remain
+    # separately available through the member passbook / My Share view.
     member_ids=[str(m["_id"]) for m in members]
     shares=await db.shares.find({"tenant_id":tenant_id,"member_id":{"$in":member_ids},"status":"active"}).sort("share_no",1).to_list(20000) if member_ids else []
     shares_by_member={mid:[] for mid in member_ids}
@@ -677,10 +679,14 @@ async def monthly_kist_bulk(tenant_id: str, body: BulkMonthlyKistCreate, user=De
             paid_rows=await db.transactions.find({"tenant_id":tenant_id,"member_id":entry.member_id,"type":"contribution","$and":[{"$or":[{"share_id":allocation.share_id},{"share_no":int(share["share_no"]),"share_id":{"$exists":False}}]},{"$or":[{"payment_category":"monthly_kist"},{"payment_category":{"$exists":False}}]}],"date":{"$gte":start,"$lt":end}}).sort([("date",-1),("created_at",-1),("_id",-1)]).to_list(500)
             already=round(sum(float(x.get("amount",0)) for x in paid_rows),2); remaining=round(expected-already,2)
             if remaining<=0.009: continue
-            if allocation.amount>remaining+0.009: raise HTTPException(400,f"Share {share['share_no']} can accept at most {remaining:.2f} for {body.period}")
-            after=round(already+allocation.amount,2); status="paid" if after>=expected-0.009 else "partial"
-            txid=await insert_tx(tenant_id,entry.member_id,"contribution",allocation.amount,body.account,user,share_id=allocation.share_id,share_no=int(share["share_no"]),payment_category="monthly_kist",period=body.period,expected_amount=expected,paid_amount=after,status=status,date=dt,note=body.note,idempotency_key=f"{body.idempotency_key}:{allocation.share_id}" if body.idempotency_key else None)
-            total+=allocation.amount; paid_members.add(entry.member_id); results.append({"id":txid,"member_id":entry.member_id,"share_id":allocation.share_id,"share_no":int(share["share_no"]),"amount":allocation.amount,"status":status})
+            # The status screen can be stale if another admin posts concurrently.
+            # Never over-collect: cap the requested amount to the live remaining
+            # balance instead of aborting the entire Save All operation mid-batch.
+            post_amount=round(min(float(allocation.amount),remaining),2)
+            if post_amount<=0.009: continue
+            after=round(already+post_amount,2); status="paid" if after>=expected-0.009 else "partial"
+            txid=await insert_tx(tenant_id,entry.member_id,"contribution",post_amount,body.account,user,share_id=allocation.share_id,share_no=int(share["share_no"]),payment_category="monthly_kist",period=body.period,expected_amount=expected,paid_amount=after,status=status,date=dt,note=body.note,idempotency_key=f"{body.idempotency_key}:{allocation.share_id}" if body.idempotency_key else None)
+            total+=post_amount; paid_members.add(entry.member_id); results.append({"id":txid,"member_id":entry.member_id,"share_id":allocation.share_id,"share_no":int(share["share_no"]),"amount":post_amount,"status":status})
     penalties=[]
     for mid in paid_members:
         pid=await _post_bc_penalty_once(tenant_id,mid,body.period,dt,body.account,user,body.note)
@@ -795,7 +801,7 @@ async def group_activity(tenant_id:str,page:int=1,page_size:int=10,user=Depends(
     return {"items":items,"page":page,"page_size":page_size,"has_more":page*page_size<total,"total":total}
 
 @router.get("/{tenant_id}/accounting/{view}")
-async def accounting_view(tenant_id:str, view:str, period:str|None=None, account:str|None=None, filter:str|None=None, page:int=1, page_size:int=10, user=Depends(admin_user)):
+async def accounting_view(tenant_id:str, view:str, period:str|None=None, account:str|None=None, filter:str|None=None, page:int=1, page_size:int=10, user=Depends(current_user)):
     """Accounting drill-down read model.
 
     This endpoint deliberately separates earned income/profit, operating
@@ -805,6 +811,10 @@ async def accounting_view(tenant_id:str, view:str, period:str|None=None, account
     """
     await tenant_guard(user, tenant_id)
     allowed={"profit","expenses","outflows","closing","interest","active-loans","kist","register"}
+    if user.get("role") not in ("member", "group_admin", "super_admin"):
+        raise HTTPException(403,"Accounting access denied")
+    if user.get("role")=="member" and view not in allowed:
+        raise HTTPException(403,"Accounting access denied")
     if view not in allowed: raise HTTPException(404,"Accounting view not found")
     db=get_db()
     tenant=await db.tenants.find_one({"_id":parse_oid(tenant_id)})
@@ -952,7 +962,6 @@ async def accounting_view(tenant_id:str, view:str, period:str|None=None, account
         y,m=map(int,p.split("-")); start=datetime(y,m,1,tzinfo=timezone.utc); end=datetime(y+1,1,1,tzinfo=timezone.utc) if m==12 else datetime(y,m+1,1,tzinfo=timezone.utc)
         expected=float(tenant.get("kist_per_share",500) or 500)
         member_query={"tenant_id":tenant_id,"active":True}
-        if user.get("role")=="member": member_query["_id"]=parse_oid(str(user.get("member_id")))
         members=await db.members.find(member_query).sort([("first_name",1),("last_name",1),("_id",1)]).to_list(5000)
         member_ids=[str(x["_id"]) for x in members]
         shares=await db.shares.find({"tenant_id":tenant_id,"member_id":{"$in":member_ids},"status":"active"}).sort([("member_id",1),("share_no",1),("_id",1)]).to_list(20000) if member_ids else []

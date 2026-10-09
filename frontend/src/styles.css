@@ -3087,3 +3087,6 @@ button,.btn-primary,.btn-secondary,.input,textarea,select{font-size:15px}
 .loan-slider-value{font-size:20px;color:#087443;white-space:nowrap}
 .loan-policy-warning{padding:12px 14px;border-radius:14px;background:#fff7ed;border:1px solid #fed7aa;color:#9a3412;font-size:13px;font-weight:800}
 @media(max-width:520px){.drill-summary-grid{grid-template-columns:1fr 1fr}.kist-member-row>summary{padding:12px}.kist-member-total{gap:5px}.kist-member-total strong{font-size:14px}.kist-share-line{grid-template-columns:1fr auto;}.kist-share-line>span:last-child{grid-column:2;grid-row:1}.loan-slider-value{font-size:18px}}
+
+/* In-modal confirmation must remain visible above the modal backdrop. */
+.success-banner{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:12px 14px;border:1px solid #b7e4c7;border-radius:14px;background:#ecfdf3;color:#166534;font-size:13px;font-weight:750;line-height:1.45;margin-bottom:12px}.success-banner .error-close{position:static;flex:0 0 auto;color:#166534}

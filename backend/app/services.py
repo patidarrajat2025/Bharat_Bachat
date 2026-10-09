@@ -53,9 +53,13 @@ async def tenant_summary(tenant_id: str, member_id: str | None = None):
                 "bc_penalty_value": {"$convert": {"input": {"$ifNull": ["$bc_regular_kist_penalty", 0]}, "to": "double", "onError": 0, "onNull": 0}},
                 "other_interest_value": {"$convert": {"input": {"$ifNull": ["$other_interest", 0]}, "to": "double", "onError": 0, "onNull": 0}},
                 "other_penalty_value": {"$convert": {"input": {"$ifNull": ["$other_penalty", 0]}, "to": "double", "onError": 0, "onNull": 0}},
+                # A normal transaction may carry expense_id=None because the
+                # materialized feed schema writes that key for every row. Treat
+                # missing AND explicit-null as an ordinary transaction; exclude
+                # only rows linked to a real expense document.
                 "is_real": {"$and": [
                     {"$not": [{"$in": ["$type", ["expense_allocation", "expense"]]}]},
-                    {"$eq": [{"$type": "$expense_id"}, "missing"]},
+                    {"$in": [{"$type": "$expense_id"}, ["missing", "null"]]},
                 ]},
             }},
             {"$group": {
