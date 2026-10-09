@@ -30,6 +30,7 @@ class TenantSettingsUpdate(BaseModel):
     max_loan_multiplier: float | None = Field(default=None, gt=0, le=1000)
     min_group_reserve_balance: float | None = Field(default=None, ge=0)
     min_loan_amount: float | None = Field(default=None, ge=0)
+    min_advance_apply_months: int | None = Field(default=None, ge=0, le=24)
 
 class TenantCreate(BaseModel):
     name: str = Field(min_length=2, max_length=120)
@@ -84,6 +85,7 @@ class MemberUpdate(BaseModel):
 
 
 class ContributionCreate(BaseModel):
+    idempotency_key: str | None = Field(default=None, min_length=8, max_length=120)
     member_id: str
     amount: float = Field(gt=0)
     share_no: int = Field(default=1, ge=1)
@@ -93,10 +95,11 @@ class ContributionCreate(BaseModel):
 
 
 class MoneyInCreate(BaseModel):
+    idempotency_key: str | None = Field(default=None, min_length=8, max_length=120)
     member_id: str | None = None
     amount: float = Field(gt=0)
     type: Literal["interest", "penalty"]
-    # Penalties are separated for the bank-style Profit calculation.
+    # Penalties are separated for profit calculation.
     penalty_category: Literal["bc", "loan"] = "bc"
     account: Account = "cash"
     date: DateType | None = None
@@ -104,6 +107,7 @@ class MoneyInCreate(BaseModel):
 
 
 class LoanCreate(BaseModel):
+    idempotency_key: str | None = Field(default=None, min_length=8, max_length=120)
     member_id: str
     principal: float = Field(gt=0)
     interest_rate: float = Field(default=2.0, ge=0, le=100)
@@ -114,6 +118,7 @@ class LoanCreate(BaseModel):
 
 
 class LoanPayment(BaseModel):
+    idempotency_key: str | None = Field(default=None, min_length=8, max_length=120)
     loan_id: str
     amount: float | None = Field(default=None, gt=0)
     # Backward-compatible fields for older clients; when amount is supplied the server calculates the split.
@@ -125,9 +130,12 @@ class LoanPayment(BaseModel):
 
 
 class LoanRequestCreate(BaseModel):
+    idempotency_key: str | None = Field(default=None, min_length=8, max_length=120)
     amount: float = Field(gt=0)
     months: int = Field(default=2, ge=1, le=60)
     purpose: str = Field(default="", max_length=300)
+    loan_apply_date: DateType | None = None
+    requested_start_date: DateType | None = None
 
 
 class LoanRequestDecision(BaseModel):
@@ -145,6 +153,7 @@ class MonthlyKistAllocation(BaseModel):
 
 
 class MonthlyKistCreate(BaseModel):
+    idempotency_key: str | None = Field(default=None, min_length=8, max_length=120)
     member_id: str
     period: str = Field(pattern=r"^\d{4}-\d{2}$")
     allocations: list[MonthlyKistAllocation] = Field(min_length=1)
@@ -158,6 +167,7 @@ class BulkMonthlyKistEntry(BaseModel):
     allocations: list[MonthlyKistAllocation] = Field(default_factory=list)
 
 class BulkMonthlyKistCreate(BaseModel):
+    idempotency_key: str | None = Field(default=None, min_length=8, max_length=120)
     period: str = Field(pattern=r"^\d{4}-\d{2}$")
     entries: list[BulkMonthlyKistEntry] = Field(min_length=1)
     account: Account = "cash"
@@ -165,6 +175,7 @@ class BulkMonthlyKistCreate(BaseModel):
     note: str = Field(default="", max_length=300)
 
 class ExpenseCreate(BaseModel):
+    idempotency_key: str | None = Field(default=None, min_length=8, max_length=120)
     category: str = Field(min_length=1, max_length=80)
     amount: float = Field(gt=0)
     account: Account = "cash"

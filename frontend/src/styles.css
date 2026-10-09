@@ -1471,7 +1471,7 @@ body{background:linear-gradient(145deg,#F1F9F5 0%,#FFFFFF 48%,#EDF7F2 100%)}
 .super-action-row .btn-primary,.super-action-row .btn-secondary{min-width:0;padding-inline:9px;font-size:11px}
 .super-avatar{width:46px!important;height:46px!important;border-radius:15px!important}
 
-/* PhonePe / HDFC inspired passbook: dense, familiar transaction rows. */
+/* Compact transaction rows for mobile financial feeds. */
 .passbook-filter-card{padding:14px!important}
 .passbook-filter-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;align-items:end}
 .passbook-list{display:grid;gap:1px;border:1px solid #DCE9E3;border-radius:22px;overflow:hidden;background:#DCE9E3;box-shadow:0 12px 30px rgba(26,43,76,.06)}
@@ -3055,3 +3055,31 @@ button,.btn-primary,.btn-secondary,.input,textarea,select{font-size:15px}
 .accounting-ledger-meta{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:12px 0 8px;padding:10px 14px;border:1px solid #E2E8F0;border-radius:14px;background:#F8FAFC;color:#64748B;font-size:12px;font-weight:750}
 .accounting-ledger-meta strong{color:#1A2B4C;font-size:12px;white-space:nowrap}
 @media(max-width:520px){.accounting-ledger-meta{padding:9px 12px;font-size:11px}.accounting-ledger-meta strong{font-size:11px}}
+
+/* 2026 financial drill-down + loan apply refinement */
+.login-reference-language{min-width:124px!important;display:grid!important;grid-template-columns:1fr 1fr!important;gap:4px!important;padding:4px!important;background:#0f172a!important;border:1px solid rgba(255,255,255,.38)!important;border-radius:16px!important;color:#fff!important}
+.login-reference-language button{min-height:38px!important;border:0!important;border-radius:12px!important;background:transparent!important;color:#e2e8f0!important;font-size:12px!important;font-weight:900!important;cursor:pointer}
+.login-reference-language button.active{background:#0f9d58!important;color:#fff!important;box-shadow:0 3px 10px rgba(0,0,0,.18)!important}
+.login-reference-language button:not(.active):hover{background:#334155!important;color:#fff!important}
+.drill-summary-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;margin-bottom:12px}
+.drill-summary-grid>div{min-width:0;padding:12px;border:1px solid #dce9e3;border-radius:14px;background:#f8fbfa;display:grid;gap:4px}
+.drill-summary-grid span{font-size:10px;font-weight:850;color:#64748b}
+.drill-summary-grid b{font-size:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#1a2b4c}
+.kist-member-board{display:grid;gap:10px;margin-top:12px}
+.kist-member-row{border:1px solid #dce9e3;border-radius:18px;background:#fff;overflow:hidden}
+.kist-member-row>summary{list-style:none;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:14px 15px;cursor:pointer}
+.kist-member-row>summary::-webkit-details-marker{display:none}
+.kist-member-row>summary>div:first-child{min-width:0;display:grid;gap:4px}
+.kist-member-row>summary b{font-size:15px;color:#1a2b4c;overflow:hidden;text-overflow:ellipsis}
+.kist-member-row>summary small{font-size:11px;color:#64748b;font-weight:750}
+.kist-member-total{display:flex;align-items:center;gap:9px;white-space:nowrap}
+.kist-member-total strong{font-size:16px;color:#087443}
+.kist-share-breakdown{padding:10px 14px 14px;border-top:1px solid #edf2ef;background:#f8fbfa;display:grid;gap:7px}
+.kist-share-line{display:grid;grid-template-columns:1fr auto auto;align-items:center;gap:9px;padding:9px 10px;border:1px solid #e2ebe7;border-radius:12px;background:#fff}
+.kist-share-line>span:first-child{font-weight:850;color:#1a2b4c;font-size:12px}.kist-share-line>span:nth-child(2){font-size:11px;font-weight:800;color:#475569;white-space:nowrap}
+.loan-liquidity-banner{padding:12px 14px;border-radius:14px;background:#effaf4;border:1px solid #bde4ce;color:#087443;font-size:13px;font-weight:750}
+.loan-liquidity-banner:has(span:first-child){min-height:44px;display:flex;align-items:center}
+.loan-credit-slider{width:100%;height:7px;margin:14px 0 8px;accent-color:#0f9d58;cursor:pointer}
+.loan-slider-value{font-size:20px;color:#087443;white-space:nowrap}
+.loan-policy-warning{padding:12px 14px;border-radius:14px;background:#fff7ed;border:1px solid #fed7aa;color:#9a3412;font-size:13px;font-weight:800}
+@media(max-width:520px){.drill-summary-grid{grid-template-columns:1fr 1fr}.kist-member-row>summary{padding:12px}.kist-member-total{gap:5px}.kist-member-total strong{font-size:14px}.kist-share-line{grid-template-columns:1fr auto;}.kist-share-line>span:last-child{grid-column:2;grid-row:1}.loan-slider-value{font-size:18px}}

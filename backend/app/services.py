@@ -288,21 +288,19 @@ async def backfill_legacy_expense_allocations():
     """
     db = get_db()
     try:
-        tenants = await db.tenants.find({"expense_allocation_backfill_at": {"$exists": False}}, {"_id": 1}).to_list(1000)
+        tenant_cursor = db.tenants.find({"expense_allocation_backfill_at": {"$exists": False}}, {"_id": 1})
         from pymongo import UpdateOne
-        for tenant in tenants:
+        async for tenant in tenant_cursor:
             tenant_id = str(tenant["_id"])
-            expenses = await db.expenses.find({"tenant_id": tenant_id}).to_list(10000)
-            if not expenses:
-                await db.tenants.update_one({"_id": tenant["_id"]}, {"$set": {"expense_allocation_backfill_at": datetime.now(timezone.utc)}})
-                continue
             shares = await db.shares.find({"tenant_id": tenant_id, "status": "active"}).sort("share_no", 1).to_list(10000)
             if not shares:
                 await db.tenants.update_one({"_id": tenant["_id"]}, {"$set": {"expense_allocation_backfill_at": datetime.now(timezone.utc)}})
                 continue
             existing = set(await db.transactions.distinct("expense_id", {"tenant_id": tenant_id, "type": "expense_allocation"}))
             ops=[]
-            for expense in expenses:
+            expense_count=0
+            async for expense in db.expenses.find({"tenant_id": tenant_id}).sort([("date",1),("_id",1)]):
+                expense_count += 1
                 expense_id=str(expense["_id"])
                 if expense_id in existing: continue
                 total=float(expense.get("amount",0) or 0); per=round(total/len(shares),2); allocated=0.0
@@ -320,6 +318,6 @@ async def backfill_legacy_expense_allocations():
                     if len(ops)>=1000:
                         await db.transactions.bulk_write(ops,ordered=False); ops=[]
             if ops: await db.transactions.bulk_write(ops,ordered=False)
-            await db.tenants.update_one({"_id": tenant["_id"]}, {"$set": {"expense_allocation_backfill_at": datetime.now(timezone.utc)}})
+            await db.tenants.update_one({"_id": tenant["_id"]}, {"$set": {"expense_allocation_backfill_at": datetime.now(timezone.utc), "expense_allocation_backfill_count": expense_count}})
     except Exception as exc:
         print(f"[expense-backfill] skipped: {exc}", flush=True)

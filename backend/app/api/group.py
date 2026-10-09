@@ -1,4 +1,4 @@
-from datetime import datetime, timezone, date
+from datetime import datetime, timezone, date, timedelta
 import asyncio
 import uuid
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
@@ -22,6 +22,7 @@ _feed_repair_lock=asyncio.Lock()
 
 async def ensure_financial_feed_ready(tenant_id: str):
     db=get_db()
+    await db.financial_feed.update_many({"tenant_id":tenant_id,"source_type":"expense","amount":{"$gt":0}},[{"$set":{"amount":{"$multiply":["$amount",-1]},"amount_minor":{"$multiply":["$amount_minor",-1]}}}])
     tx_count=await db.transactions.count_documents({"tenant_id":tenant_id})
     expense_count=await db.expenses.count_documents({"tenant_id":tenant_id})
     feed_count=await db.financial_feed.count_documents({"tenant_id":tenant_id})
@@ -32,9 +33,31 @@ async def ensure_financial_feed_ready(tenant_id: str):
         expense_count=await db.expenses.count_documents({"tenant_id":tenant_id})
         feed_count=await db.financial_feed.count_documents({"tenant_id":tenant_id})
         if feed_count < tx_count + expense_count:
-            await backfill_financial_feed()
+            await backfill_financial_feed(tenant_id)
 
 def as_id(v): return str(v)
+
+async def acquire_operation_lock(operation_key: str, ttl_seconds: int = 30):
+    """Short-lived Mongo lock for money-changing operations.
+    It prevents two admin requests from calculating the same balance/outstanding
+    concurrently without requiring a multi-document transaction on every write.
+    """
+    db=get_db(); now=datetime.now(timezone.utc); expires=now+timedelta(seconds=ttl_seconds)
+    await db.operation_locks.delete_many({"operation_key":operation_key,"expires_at":{"$lte":now}})
+    try:
+        await db.operation_locks.insert_one({"operation_key":operation_key,"created_at":now,"expires_at":expires})
+    except Exception:
+        raise HTTPException(409,"Another financial operation is already being processed. Please try again.")
+    return operation_key
+
+async def release_operation_lock(operation_key: str):
+    try: await get_db().operation_locks.delete_one({"operation_key":operation_key})
+    except Exception: pass
+
+async def existing_tx_by_idempotency(tenant_id: str, key: str | None):
+    if not key: return None
+    return await get_db().transactions.find_one({"tenant_id":tenant_id,"idempotency_key":key})
+
 async def admin_user(user=Depends(current_user)):
     if user["role"] not in ("group_admin","super_admin"): raise HTTPException(403,"Admin access required")
     return user
@@ -398,6 +421,11 @@ async def group_settings(tenant_id:str):
     if not tenant: raise HTTPException(404,"Group not found")
     return tenant
 
+def _add_months(d:date, months:int):
+    import calendar
+    months=max(0,int(months or 0)); y=d.year+(d.month-1+months)//12; m=(d.month-1+months)%12+1; day=min(d.day,calendar.monthrange(y,m)[1])
+    return date(y,m,day)
+
 def _due_overdue_days(payment_dt:datetime, due_day:int, year:int|None=None, month:int|None=None):
     y=year or payment_dt.year; m=month or payment_dt.month
     import calendar
@@ -416,11 +444,16 @@ async def _post_bc_penalty_once(tenant_id:str,member_id:str,period:str,payment_d
 
 async def _feed_upsert(doc, *, source_type="transaction"):
     db=get_db(); amount=float(doc.get("amount",0) or 0)
-    feed={"source_key":f"{source_type}:{doc.get('_id')}","source_type":source_type,"source_id":str(doc.get("_id")),"transaction_ref":doc.get("transaction_ref"),"tenant_id":doc.get("tenant_id"),"member_id":str(doc.get("member_id")) if doc.get("member_id") else None,"type":doc.get("type","transaction"),"amount":amount,"amount_minor":int(doc.get("amount_minor",round(amount*100)) or 0),"account":doc.get("account","cash"),"date":doc.get("date") or doc.get("created_at"),"created_at":doc.get("created_at") or doc.get("date"),"note":doc.get("note","") or "","payment_category":doc.get("payment_category"),"loan_interest_collected":float(doc.get("loan_interest_collected",doc.get("interest",0)) or 0),"loan_penalty_collected":float(doc.get("loan_penalty_collected",0) or 0),"bc_regular_kist_penalty":float(doc.get("bc_regular_kist_penalty",0) or 0),"interest":float(doc.get("interest",0) or 0),"principal":float(doc.get("principal",0) or 0),"share_no":doc.get("share_no"),"share_id":str(doc.get("share_id")) if doc.get("share_id") else None,"expense_id":str(doc.get("expense_id")) if doc.get("expense_id") else None}
-    await db.financial_feed.update_one({"source_key":feed["source_key"]},{"$set":feed},{"$setOnInsert":{"created_at":feed["created_at"]}},upsert=True)
+    if source_type=="expense": amount=-abs(amount)
+    feed={"source_key":f"{source_type}:{doc.get('_id')}","source_type":source_type,"source_id":str(doc.get("_id")),"transaction_ref":doc.get("transaction_ref"),"tenant_id":doc.get("tenant_id"),"member_id":str(doc.get("member_id")) if doc.get("member_id") else None,"type":doc.get("type","transaction"),"amount":amount,"amount_minor":(-abs(int(doc.get("amount_minor",round(abs(amount)*100)) or 0)) if source_type=="expense" else int(doc.get("amount_minor",round(amount*100)) or 0)),"account":doc.get("account","cash"),"date":doc.get("date") or doc.get("created_at"),"created_at":doc.get("created_at") or doc.get("date"),"note":doc.get("note","") or "","payment_category":doc.get("payment_category"),"loan_interest_collected":float(doc.get("loan_interest_collected",doc.get("interest",0)) or 0),"loan_penalty_collected":float(doc.get("loan_penalty_collected",0) or 0),"bc_regular_kist_penalty":float(doc.get("bc_regular_kist_penalty",0) or 0),"interest":float(doc.get("interest",0) or 0),"principal":float(doc.get("principal",0) or 0),"share_no":doc.get("share_no"),"share_id":str(doc.get("share_id")) if doc.get("share_id") else None,"expense_id":str(doc.get("expense_id")) if doc.get("expense_id") else None,"category":doc.get("category") if source_type=="expense" else None}
+    await db.financial_feed.update_one({"source_key":feed["source_key"]},{"$set":feed,"$setOnInsert":{"created_at":feed["created_at"]}},upsert=True)
 
 async def insert_tx(tenant_id,member_id,typ,amount,account,user,**extra):
-    db=get_db(); now=datetime.now(timezone.utc); normalized=round(float(amount or 0),2); doc={"tenant_id":tenant_id,"member_id":member_id,"type":typ,"amount":normalized,"amount_minor":int(round(normalized*100)),"account":account,"transaction_ref":f"BB-{now.strftime('%Y%m%d')}-{uuid.uuid4().hex[:10].upper()}","created_at":now,**extra}
+    db=get_db(); now=datetime.now(timezone.utc); idem=extra.pop("idempotency_key",None)
+    if idem:
+        existing=await db.transactions.find_one({"tenant_id":tenant_id,"idempotency_key":idem})
+        if existing: return str(existing["_id"])
+    normalized=round(float(amount or 0),2); doc={"tenant_id":tenant_id,"member_id":member_id,"type":typ,"amount":normalized,"amount_minor":int(round(normalized*100)),"account":account,"transaction_ref":f"BB-{now.strftime('%Y%m%d')}-{uuid.uuid4().hex[:10].upper()}","created_at":now,"idempotency_key":idem,**extra}
     r=await db.transactions.insert_one(doc)
     doc["_id"]=r.inserted_id
     await _feed_upsert(doc)
@@ -435,7 +468,7 @@ async def insert_tx(tenant_id,member_id,typ,amount,account,user,**extra):
 async def contribution(tenant_id:str,body:ContributionCreate,user=Depends(admin_user)):
     await tenant_guard(user,tenant_id); m=await get_member(get_db(),tenant_id,body.member_id); share=await ensure_share(m,body.share_no)
     dt=datetime.combine(body.date or date.today(),datetime.min.time(),tzinfo=timezone.utc)
-    return {"id":await insert_tx(tenant_id,body.member_id,"contribution",body.amount,body.account,user,share_id=str(share["_id"]),share_no=body.share_no,payment_category="manual_contribution",date=dt,note=body.note)}
+    return {"id":await insert_tx(tenant_id,body.member_id,"contribution",body.amount,body.account,user,share_id=str(share["_id"]),share_no=body.share_no,payment_category="manual_contribution",date=dt,note=body.note,idempotency_key=body.idempotency_key)}
 
 @router.get("/{tenant_id}/monthly-kist-summary")
 async def monthly_kist_summary(tenant_id:str,period:str,user=Depends(current_user)):
@@ -537,8 +570,15 @@ async def monthly_kist_bulk_status(tenant_id: str, period: str, user=Depends(adm
             paid=round(float(paid_by_share.get(str(sh["_id"]),0))+float(paid_by_legacy.get((str(member["_id"]),int(sh["share_no"])),0)),2)
             remaining=round(max(0,expected-paid),2)
             rows.append({"share_id":str(sh["_id"]),"share_no":int(sh["share_no"]),"expected_amount":expected,"paid_amount":paid,"remaining_amount":remaining,"status":"paid" if remaining<=0.009 else ("partial" if paid>0 else "pending")})
-        out.append({"member_id":str(member["_id"]),"name":f'{member.get("first_name","")} {member.get("last_name","")}'.strip(),"phone":member.get("phone",""),"shares":rows,"expected_total":round(expected*len(rows),2),"paid_total":round(sum(x["paid_amount"] for x in rows),2),"remaining_total":round(sum(x["remaining_amount"] for x in rows),2)})
-    return {"period":period,"kist_per_share":expected,"members":out}
+        expected_total=round(expected*len(rows),2)
+        paid_total=round(sum(x["paid_amount"] for x in rows),2)
+        remaining_total=round(sum(x["remaining_amount"] for x in rows),2)
+        member_status="paid" if rows and all(x["status"]=="paid" for x in rows) else "pending" if rows and all(x["status"]=="pending" for x in rows) else "partial"
+        out.append({"member_id":str(member["_id"]),"name":f'{member.get("first_name","")} {member.get("last_name","")}'.strip(),"phone":member.get("phone",""),"shares":rows,"shares_count":len(rows),"expected_total":expected_total,"paid_total":paid_total,"remaining_total":remaining_total,"status":member_status})
+    collected=[x for x in out if x["status"]=="paid"]
+    pending=[x for x in out if x["status"]=="pending"]
+    partial=[x for x in out if x["status"]=="partial"]
+    return {"period":period,"kist_per_share":expected,"members":out,"collected":collected,"pending":pending,"partial":partial,"total_collected":round(sum(x["paid_total"] for x in collected),2),"total_pending":round(sum(x["remaining_total"] for x in pending),2),"total_partial":round(sum(x["paid_total"] for x in partial),2)}
 
 @router.post("/{tenant_id}/monthly-kist-bulk")
 async def monthly_kist_bulk(tenant_id: str, body: BulkMonthlyKistCreate, user=Depends(admin_user)):
@@ -556,12 +596,12 @@ async def monthly_kist_bulk(tenant_id: str, body: BulkMonthlyKistCreate, user=De
             share=share_map.get(allocation.share_id)
             if not share: raise HTTPException(400,"One or more selected shares are not active for this member")
             y,m=map(int,body.period.split("-")); start=datetime(y,m,1,tzinfo=timezone.utc); end=datetime(y+1,1,1,tzinfo=timezone.utc) if m==12 else datetime(y,m+1,1,tzinfo=timezone.utc)
-            paid_rows=await db.transactions.find({"tenant_id":tenant_id,"member_id":entry.member_id,"type":"contribution","$and":[{"$or":[{"share_id":allocation.share_id},{"share_no":int(share["share_no"]),"share_id":{"$exists":False}}]},{"$or":[{"payment_category":"monthly_kist"},{"payment_category":{"$exists":False}}]}],"date":{"$gte":start,"$lt":end}}).to_list(500)
+            paid_rows=await db.transactions.find({"tenant_id":tenant_id,"member_id":entry.member_id,"type":"contribution","$and":[{"$or":[{"share_id":allocation.share_id},{"share_no":int(share["share_no"]),"share_id":{"$exists":False}}]},{"$or":[{"payment_category":"monthly_kist"},{"payment_category":{"$exists":False}}]}],"date":{"$gte":start,"$lt":end}}).sort([("date",-1),("created_at",-1),("_id",-1)]).to_list(500)
             already=round(sum(float(x.get("amount",0)) for x in paid_rows),2); remaining=round(expected-already,2)
             if remaining<=0.009: continue
             if allocation.amount>remaining+0.009: raise HTTPException(400,f"Share {share['share_no']} can accept at most {remaining:.2f} for {body.period}")
             after=round(already+allocation.amount,2); status="paid" if after>=expected-0.009 else "partial"
-            txid=await insert_tx(tenant_id,entry.member_id,"contribution",allocation.amount,body.account,user,share_id=allocation.share_id,share_no=int(share["share_no"]),payment_category="monthly_kist",period=body.period,expected_amount=expected,paid_amount=after,status=status,date=dt,note=body.note)
+            txid=await insert_tx(tenant_id,entry.member_id,"contribution",allocation.amount,body.account,user,share_id=allocation.share_id,share_no=int(share["share_no"]),payment_category="monthly_kist",period=body.period,expected_amount=expected,paid_amount=after,status=status,date=dt,note=body.note,idempotency_key=f"{body.idempotency_key}:{allocation.share_id}" if body.idempotency_key else None)
             total+=allocation.amount; paid_members.add(entry.member_id); results.append({"id":txid,"member_id":entry.member_id,"share_id":allocation.share_id,"share_no":int(share["share_no"]),"amount":allocation.amount,"status":status})
     penalties=[]
     for mid in paid_members:
@@ -586,14 +626,14 @@ async def monthly_kist(tenant_id:str,body:MonthlyKistCreate,user=Depends(admin_u
         if not share: raise HTTPException(400,"One or more selected shares are not active for this member")
         expected=float(tenant.get("kist_per_share",500))
         y,m=map(int,body.period.split("-")); start=datetime(y,m,1,tzinfo=timezone.utc); end=datetime(y+1,1,1,tzinfo=timezone.utc) if m==12 else datetime(y,m+1,1,tzinfo=timezone.utc)
-        paid_cursor=await db.transactions.find({"tenant_id":tenant_id,"member_id":body.member_id,"type":"contribution","$and":[{"$or":[{"share_id":allocation.share_id},{"share_no":int(share["share_no"]),"share_id":{"$exists":False}}]},{"$or":[{"payment_category":"monthly_kist"},{"payment_category":{"$exists":False}}]}],"date":{"$gte":start,"$lt":end}}).to_list(500)
+        paid_cursor=await db.transactions.find({"tenant_id":tenant_id,"member_id":body.member_id,"type":"contribution","$and":[{"$or":[{"share_id":allocation.share_id},{"share_no":int(share["share_no"]),"share_id":{"$exists":False}}]},{"$or":[{"payment_category":"monthly_kist"},{"payment_category":{"$exists":False}}]}],"date":{"$gte":start,"$lt":end}}).sort([("date",-1),("created_at",-1),("_id",-1)]).to_list(500)
         already_paid=round(sum(float(x.get("amount",0)) for x in paid_cursor),2)
         remaining=round(expected-already_paid,2)
         if remaining<=0.009: raise HTTPException(409,f"Share {share['share_no']} is already fully paid for {body.period}")
         if allocation.amount>remaining+0.009: raise HTTPException(400,f"Share {share['share_no']} can accept at most {remaining:.2f} for {body.period}")
         after=round(already_paid+allocation.amount,2)
         status="paid" if after>=expected-0.009 else "partial"
-        txid=await insert_tx(tenant_id,body.member_id,"contribution",allocation.amount,body.account,user,share_id=allocation.share_id,share_no=int(share["share_no"]),payment_category="monthly_kist",period=body.period,expected_amount=expected,paid_amount=after,status=status,date=dt,note=body.note)
+        txid=await insert_tx(tenant_id,body.member_id,"contribution",allocation.amount,body.account,user,share_id=allocation.share_id,share_no=int(share["share_no"]),payment_category="monthly_kist",period=body.period,expected_amount=expected,paid_amount=after,status=status,date=dt,note=body.note,idempotency_key=f"{body.idempotency_key}:{allocation.share_id}" if body.idempotency_key else None)
         results.append({"id":txid,"share_id":allocation.share_id,"share_no":int(share["share_no"]),"paid_amount":allocation.amount,"cumulative_paid":after,"expected_amount":expected,"status":status})
     penalty_id=await _post_bc_penalty_once(tenant_id,body.member_id,body.period,dt,body.account,user,body.note)
     penalty_amount=0.0
@@ -611,20 +651,20 @@ async def money_in(tenant_id:str,body:MoneyInCreate,user=Depends(admin_user)):
     if not body.note.strip(): raise HTTPException(400,"Note / Reason is required for manual interest or penalty entries")
     is_penalty=body.type=="penalty"
     payment_category="other" if is_penalty else "other_interest"
-    return {"id":await insert_tx(tenant_id,body.member_id,body.type,body.amount,body.account,user,date=dt,note=body.note,payment_category=payment_category,penalty_category=body.penalty_category if is_penalty else None,other_interest=body.amount if body.type=="interest" else 0,other_penalty=body.amount if is_penalty else 0)}
+    return {"id":await insert_tx(tenant_id,body.member_id,body.type,body.amount,body.account,user,date=dt,note=body.note,payment_category=payment_category,penalty_category=body.penalty_category if is_penalty else None,other_interest=body.amount if body.type=="interest" else 0,other_penalty=body.amount if is_penalty else 0,idempotency_key=body.idempotency_key)}
 
 @router.get("/{tenant_id}/settings")
 async def get_group_settings(tenant_id:str,user=Depends(admin_user)):
     await tenant_guard(user,tenant_id)
     t=await group_settings(tenant_id)
-    keys=("kist_per_share","bc_due_date","bc_per_day_penalty","loan_interest_rate_per_month","loan_per_day_penalty","loan_due_date","required_admin_approvals","max_loan_multiplier","min_group_reserve_balance","min_loan_amount")
+    keys=("kist_per_share","bc_due_date","bc_per_day_penalty","loan_interest_rate_per_month","loan_per_day_penalty","loan_due_date","required_admin_approvals","max_loan_multiplier","min_group_reserve_balance","min_loan_amount","min_advance_apply_months")
     return {k:t.get(k) for k in keys}
 
 @router.patch("/{tenant_id}/settings")
 async def update_group_settings(tenant_id:str,body:TenantSettingsUpdate,user=Depends(admin_user)):
     await tenant_guard(user,tenant_id)
     values=body.model_dump(exclude_none=True)
-    allowed={"kist_per_share","bc_due_date","bc_per_day_penalty","loan_interest_rate_per_month","loan_per_day_penalty","loan_due_date","required_admin_approvals","max_loan_multiplier","min_group_reserve_balance","min_loan_amount"}
+    allowed={"kist_per_share","bc_due_date","bc_per_day_penalty","loan_interest_rate_per_month","loan_per_day_penalty","loan_due_date","required_admin_approvals","max_loan_multiplier","min_group_reserve_balance","min_loan_amount","min_advance_apply_months"}
     values={k:v for k,v in values.items() if k in allowed}
     if not values: raise HTTPException(400,"No settings supplied")
     await get_db().tenants.update_one({"_id":parse_oid(tenant_id)},{"$set":values})
@@ -639,7 +679,9 @@ async def loan_eligibility(tenant_id:str,member_id:str,amount:float|None=None,mo
     credit_limit=round(max(minimum,shares*share_value*multiplier),2)
     summary=await tenant_summary(tenant_id,None); reserve=float(tenant.get("min_group_reserve_balance",0) or 0); available=float(summary.get("active_account_balance",0) or 0); max_by_funds=max(0,available-reserve)
     requested=float(amount or 0); rate=float(tenant.get("loan_interest_rate_per_month",2) or 0); total_interest=round((requested*rate/100*max(1,int(months or 1))),2) if requested else 0
-    return {"member_id":member_id,"shares":shares,"share_value":share_value,"max_loan_multiplier":multiplier,"min_loan_amount":minimum,"credit_limit":credit_limit,"active_account_balance":available,"min_group_reserve_balance":reserve,"funds_available_for_disbursement":round(max_by_funds,2),"eligible":(requested<=credit_limit and requested>=minimum and requested<=max_by_funds) if requested else True,"interest_rate_per_month":rate,"total_interest":total_interest,"total_due":round(requested+total_interest,2),"estimated_emi":round((requested+total_interest)/max(1,int(months or 1)),2) if requested else 0}
+    liquidity_ok=available>=reserve-0.01
+    min_advance_apply_months=max(0,int(tenant.get("min_advance_apply_months",2) or 2))
+    return {"member_id":member_id,"shares":shares,"share_value":share_value,"max_loan_multiplier":multiplier,"min_loan_amount":minimum,"min_advance_apply_months":min_advance_apply_months,"credit_limit":credit_limit,"active_account_balance":available,"min_group_reserve_balance":reserve,"funds_available_for_disbursement":round(max_by_funds,2),"liquidity_ok":liquidity_ok,"eligible":(liquidity_ok and requested<=credit_limit and requested>=minimum and requested<=max_by_funds) if requested else liquidity_ok,"interest_rate_per_month":rate,"total_interest":total_interest,"total_due":round(requested+total_interest,2),"estimated_emi":round((requested+total_interest)/max(1,int(months or 1)),2) if requested else 0}
 
 @router.get("/{tenant_id}/activity")
 async def group_activity(tenant_id:str,page:int=1,page_size:int=10,user=Depends(current_user)):
@@ -676,7 +718,7 @@ async def group_activity(tenant_id:str,page:int=1,page_size:int=10,user=Depends(
 
 @router.get("/{tenant_id}/accounting/{view}")
 async def accounting_view(tenant_id:str, view:str, period:str|None=None, account:str|None=None, filter:str|None=None, page:int=1, page_size:int=10, user=Depends(current_user)):
-    """Bank-style accounting drill-down read model.
+    """Accounting drill-down read model.
 
     This endpoint deliberately separates earned income/profit, operating
     expenses, asset/loan outflows and liquid closing balance. It never treats
@@ -828,23 +870,32 @@ async def accounting_view(tenant_id:str, view:str, period:str|None=None, account
         expected=float(tenant.get("kist_per_share",500) or 500)
         member_query={"tenant_id":tenant_id,"active":True}
         if user.get("role")=="member": member_query["_id"]=parse_oid(str(user.get("member_id")))
-        members=await db.members.find(member_query).sort("first_name",1).to_list(5000)
+        members=await db.members.find(member_query).sort([("first_name",1),("last_name",1),("_id",1)]).to_list(5000)
         member_ids=[str(x["_id"]) for x in members]
-        shares=await db.shares.find({"tenant_id":tenant_id,"member_id":{"$in":member_ids},"status":"active"}).sort("share_no",1).to_list(20000) if member_ids else []
-        tx=await db.transactions.find({"tenant_id":tenant_id,"member_id":{"$in":member_ids},"type":"contribution","$or":[{"payment_category":"monthly_kist"},{"payment_category":{"$exists":False}}],"date":{"$gte":start,"$lt":end}}).to_list(20000) if member_ids else []
+        shares=await db.shares.find({"tenant_id":tenant_id,"member_id":{"$in":member_ids},"status":"active"}).sort([("member_id",1),("share_no",1),("_id",1)]).to_list(20000) if member_ids else []
+        shares_by_member={mid:[] for mid in member_ids}
+        for sh in shares: shares_by_member.setdefault(str(sh["member_id"]),[]).append(sh)
+        for member in members:
+            mid=str(member["_id"]); expected_count=max(1,int(member.get("shares",1) or 1))
+            if len(shares_by_member.get(mid,[]))<expected_count: shares_by_member[mid]=await ensure_member_shares(member)
+        tx=await db.transactions.find({"tenant_id":tenant_id,"member_id":{"$in":member_ids},"type":"contribution","$or":[{"payment_category":"monthly_kist"},{"payment_category":{"$exists":False}}],"date":{"$gte":start,"$lt":end}}).sort([("date",-1),("created_at",-1),("_id",-1)]).to_list(20000) if member_ids else []
         paid={}
         for x in tx:
             key=(str(x.get("member_id")),str(x.get("share_id") or f'legacy:{x.get("share_no")}'))
             paid[key]=paid.get(key,0)+float(x.get("amount",0) or 0)
         rows=[]
         for mbr in members:
-            mid=str(mbr["_id"])
-            mshares=[x for x in shares if str(x.get("member_id"))==mid]
+            mid=str(mbr["_id"]); mshares=shares_by_member.get(mid,[]); share_rows=[]
             for sh in mshares:
                 key=(mid,str(sh["_id"])); amount=round(paid.get(key,0),2); remaining=round(max(0,expected-amount),2)
                 status="paid" if remaining<=0.01 else "partial" if amount>0 else "pending"
-                rows.append({"member_id":mid,"member_name":f'{mbr.get("first_name","")} {mbr.get("last_name","")}'.strip(),"phone":mbr.get("phone",""),"share_id":str(sh["_id"]),"share_no":int(sh.get("share_no",0)),"expected_amount":expected,"paid_amount":amount,"remaining_amount":remaining,"status":status})
-        return {"view":view,"period":p,"kist_per_share":expected,"members":rows,"collected":[x for x in rows if x["status"]=="paid"],"pending":[x for x in rows if x["status"]=="pending"],"partial":[x for x in rows if x["status"]=="partial"],"total_collected":round(sum(x["paid_amount"] for x in rows),2),"total_partial":round(sum(x["paid_amount"] for x in rows if x["status"]=="partial"),2)}
+                share_rows.append({"share_id":str(sh["_id"]),"share_no":int(sh.get("share_no",0)),"expected_amount":expected,"paid_amount":amount,"remaining_amount":remaining,"status":status})
+            expected_total=round(expected*len(share_rows),2); paid_total=round(sum(x["paid_amount"] for x in share_rows),2); remaining_total=round(sum(x["remaining_amount"] for x in share_rows),2)
+            member_status="paid" if share_rows and all(x["status"]=="paid" for x in share_rows) else "pending" if share_rows and all(x["status"]=="pending" for x in share_rows) else "partial"
+            rows.append({"member_id":mid,"member_name":f'{mbr.get("first_name","")} {mbr.get("last_name","")}'.strip(),"phone":mbr.get("phone",""),"shares":share_rows,"shares_count":len(share_rows),"expected_total":expected_total,"paid_total":paid_total,"remaining_total":remaining_total,"status":member_status})
+        status_filter=filter or "all"
+        selected=rows if status_filter=="all" else [x for x in rows if x["status"]==status_filter]
+        return {"view":view,"period":p,"kist_per_share":expected,"members":rows,"collected":[x for x in rows if x["status"]=="paid"],"pending":[x for x in rows if x["status"]=="pending"],"partial":[x for x in rows if x["status"]=="partial"],"rows":selected,"total_collected":round(sum(x["paid_total"] for x in rows if x["status"]=="paid"),2),"total_pending":round(sum(x["remaining_total"] for x in rows if x["status"]=="pending"),2),"total_partial":round(sum(x["paid_total"] for x in rows if x["status"]=="partial"),2)}
 
     # Common raw financial data for the remaining views.
     tx_rows=await db.transactions.find({"tenant_id":tenant_id}).sort("date",-1).to_list(10000)
@@ -1007,6 +1058,23 @@ async def personal_loan_overview(tenant_id:str,user=Depends(current_user)):
     loan_rows, request_rows = await asyncio.gather(loans(tenant_id,str(user["member_id"]),user=user), loan_requests(tenant_id,user=user))
     return {"loans":loan_rows,"requests":request_rows}
 
+@router.post("/{tenant_id}/transactions/{transaction_id}/reverse")
+async def reverse_transaction(tenant_id:str,transaction_id:str,user=Depends(admin_user)):
+    await tenant_guard(user,tenant_id); db=get_db(); lock_key=f"transaction-reversal:{tenant_id}:{transaction_id}"; await acquire_operation_lock(lock_key,30)
+    try:
+        source=await db.transactions.find_one({"_id":parse_oid(transaction_id),"tenant_id":tenant_id})
+        if not source: raise HTTPException(404,"Transaction not found")
+        if source.get("type")=="reversal" or source.get("reversal_of"): raise HTTPException(400,"A reversal cannot be reversed")
+        already=await db.transactions.find_one({"tenant_id":tenant_id,"reversal_of":transaction_id})
+        if already: raise HTTPException(409,"Transaction is already reversed")
+        amount=-float(source.get("amount",0) or 0)
+        now=datetime.now(timezone.utc); key=f"reversal:{transaction_id}"
+        txid=await insert_tx(tenant_id,source.get("member_id"),"reversal",amount,source.get("account","cash"),user,reversal_of=transaction_id,original_type=source.get("type"),date=now,note=f"Reversal of {source.get('transaction_ref') or transaction_id}",idempotency_key=key)
+        await audit(tenant_id,user,"TRANSACTION_REVERSED","transaction",transaction_id,{"reversal_id":txid})
+        return {"ok":True,"id":txid,"reversal_of":transaction_id}
+    finally:
+        await release_operation_lock(lock_key)
+
 @router.get("/{tenant_id}/transactions")
 async def transactions(tenant_id:str,from_date:date|None=None,to_date:date|None=None,typ:str|None=None,page:int=1,page_size:int=10,user=Depends(current_user)):
     await tenant_guard(user,tenant_id); q={"tenant_id":tenant_id}
@@ -1026,20 +1094,31 @@ async def transactions(tenant_id:str,from_date:date|None=None,to_date:date|None=
 
 @router.post("/{tenant_id}/loans")
 async def create_loan(tenant_id:str,body:LoanCreate,user=Depends(admin_user)):
-    await tenant_guard(user,tenant_id); db=get_db(); m=await get_member(db,tenant_id,body.member_id); tenant=await group_settings(tenant_id); now=datetime.now(timezone.utc)
-    shares=int(m.get("active_shares_count",m.get("shares",1)) or 1); share_value=float(tenant.get("kist_per_share",500) or 500); multiplier=float(tenant.get("max_loan_multiplier",20) or 20); minimum=float(tenant.get("min_loan_amount",10000) or 10000); limit=round(max(minimum,shares*share_value*multiplier),2)
-    summary=await tenant_summary(tenant_id,None); reserve=float(tenant.get("min_group_reserve_balance",0) or 0); available=float(summary.get("active_account_balance",0) or 0)
-    if body.principal<minimum: raise HTTPException(400,f"Minimum loan amount is ₹{minimum:,.2f}")
-    if body.principal>limit+0.01: raise HTTPException(400,f"Loan exceeds member credit limit of ₹{limit:,.2f}")
-    if available-body.principal<reserve-0.01: raise HTTPException(400,"Insufficient Group Funds")
-    rate=body.interest_rate if body.interest_rate is not None else float(tenant.get("loan_interest_rate_per_month",2) or 0); interest=round(body.principal*rate/100*body.months,2)
-    start_dt=datetime.combine(body.date or date.today(),datetime.min.time(),tzinfo=timezone.utc)
-    loan={"tenant_id":tenant_id,"member_id":body.member_id,"principal":body.principal,"interest_rate":rate,"months":body.months,"expected_interest":interest,"interest_accrued":0.0,"principal_paid":0.0,"interest_paid":0.0,"loan_interest_collected":0.0,"loan_penalty_collected":0.0,"principal_repaid":0.0,"status":"active","purpose":body.purpose,"account":body.account,"created_at":now,"start_date":start_dt,"last_interest_accrual_month":start_dt.strftime("%Y-%m"),"loan_due_date":int(tenant.get("loan_due_date",10) or 10)}
-    loan["principal_minor"]=int(round(float(body.principal)*100)); loan["expected_interest_minor"]=int(round(float(interest)*100))
-    r=await db.loans.insert_one(loan)
-    await insert_tx(tenant_id,body.member_id,"loan_disbursement",-body.principal,body.account,user,loan_id=str(r.inserted_id),date=start_dt,note=body.purpose,principal=-body.principal)
-    await audit(tenant_id,user,"LOAN_CREATED","loan",str(r.inserted_id),{"principal":body.principal,"credit_limit":limit})
-    return {"id":str(r.inserted_id),"credit_limit":limit,"total_interest":interest,"total_due":round(body.principal+interest,2)}
+    await tenant_guard(user,tenant_id); db=get_db()
+    if body.idempotency_key:
+        existing=await db.loans.find_one({"tenant_id":tenant_id,"idempotency_key":body.idempotency_key})
+        if existing:
+            interest=float(existing.get("expected_interest",0) or 0)
+            return {"id":str(existing["_id"]),"credit_limit":0,"total_interest":interest,"total_due":round(float(existing.get("principal",0) or 0)+interest,2)}
+    lock_key=f"loan-disbursement:{tenant_id}"
+    await acquire_operation_lock(lock_key,45)
+    try:
+        m=await get_member(db,tenant_id,body.member_id); tenant=await group_settings(tenant_id); now=datetime.now(timezone.utc)
+        shares=int(m.get("active_shares_count",m.get("shares",1)) or 1); share_value=float(tenant.get("kist_per_share",500) or 500); multiplier=float(tenant.get("max_loan_multiplier",20) or 20); minimum=float(tenant.get("min_loan_amount",10000) or 10000); limit=round(max(minimum,shares*share_value*multiplier),2)
+        summary=await tenant_summary(tenant_id,None); reserve=float(tenant.get("min_group_reserve_balance",0) or 0); available=float(summary.get("active_account_balance",0) or 0)
+        if body.principal<minimum: raise HTTPException(400,f"Minimum loan amount is ₹{minimum:,.2f}")
+        if body.principal>limit+0.01: raise HTTPException(400,f"Loan exceeds member credit limit of ₹{limit:,.2f}")
+        if available-body.principal<reserve-0.01: raise HTTPException(400,"Insufficient Group Funds")
+        rate=body.interest_rate if body.interest_rate is not None else float(tenant.get("loan_interest_rate_per_month",2) or 0); interest=round(body.principal*rate/100*body.months,2)
+        start_dt=datetime.combine(body.date or date.today(),datetime.min.time(),tzinfo=timezone.utc)
+        loan={"tenant_id":tenant_id,"member_id":body.member_id,"principal":body.principal,"interest_rate":rate,"months":body.months,"expected_interest":interest,"interest_accrued":0.0,"principal_paid":0.0,"interest_paid":0.0,"loan_interest_collected":0.0,"loan_penalty_collected":0.0,"principal_repaid":0.0,"status":"active","purpose":body.purpose,"account":body.account,"created_at":now,"start_date":start_dt,"idempotency_key":body.idempotency_key,"last_interest_accrual_month":start_dt.strftime("%Y-%m"),"loan_due_date":int(tenant.get("loan_due_date",10) or 10)}
+        loan["principal_minor"]=int(round(float(body.principal)*100)); loan["expected_interest_minor"]=int(round(float(interest)*100))
+        r=await db.loans.insert_one(loan)
+        await insert_tx(tenant_id,body.member_id,"loan_disbursement",-body.principal,body.account,user,loan_id=str(r.inserted_id),date=start_dt,note=body.purpose,principal=-body.principal,idempotency_key=f"loan-disbursement:{body.idempotency_key}" if body.idempotency_key else None)
+        await audit(tenant_id,user,"LOAN_CREATED","loan",str(r.inserted_id),{"principal":body.principal,"credit_limit":limit})
+        return {"id":str(r.inserted_id),"credit_limit":limit,"total_interest":interest,"total_due":round(body.principal+interest,2)}
+    finally:
+        await release_operation_lock(lock_key)
 
 @router.get("/{tenant_id}/loans")
 async def loans(tenant_id:str,member_id:str|None=None,user=Depends(current_user),page:int|None=None,page_size:int=10):
@@ -1047,7 +1126,7 @@ async def loans(tenant_id:str,member_id:str|None=None,user=Depends(current_user)
     if user["role"]=="member": q["member_id"]=str(user.get("member_id"))
     elif member_id: q["member_id"]=member_id
     if page is None:
-        rows=await db.loans.find(q).sort("created_at",-1).to_list(5000); return [serialize(x) for x in rows]
+        rows=await db.loans.find(q).sort([("created_at",-1),("_id",-1)]).limit(200).to_list(200); return [serialize(x) for x in rows]
     page=max(1,page); page_size=max(1,min(page_size,50)); rows=await db.loans.find(q).sort([("created_at",-1),("_id",-1)]).skip((page-1)*page_size).limit(page_size).to_list(page_size)
     mids=[]
     for x in rows:
@@ -1091,38 +1170,43 @@ async def group_loans(tenant_id:str,user=Depends(current_user)):
 
 @router.post("/{tenant_id}/loan-payments")
 async def loan_payment(tenant_id:str,body:LoanPayment,user=Depends(admin_user)):
-    await tenant_guard(user,tenant_id); db=get_db(); loan=await db.loans.find_one({"_id":parse_oid(body.loan_id),"tenant_id":tenant_id})
-    if not loan: raise HTTPException(404,"Loan not found")
-    if loan.get("status")!="active": raise HTTPException(400,"Loan is already closed")
-    tenant=await group_settings(tenant_id); dt=datetime.combine(body.date or date.today(),datetime.min.time(),tzinfo=timezone.utc)
-    op=float(loan.get("principal_paid",0) or 0); principal=round(float(loan.get("principal",0) or 0),2); outstanding_principal=max(0,principal-op)
-    rate=float(tenant.get("loan_interest_rate_per_month",loan.get("interest_rate",2)) or 0); due_day=int(tenant.get("loan_due_date",loan.get("loan_due_date",10)) or 10)
-    month_key=dt.strftime("%Y-%m"); interest_key=f"loan-interest:{body.loan_id}:{month_key}"; penalty_key=f"loan-penalty:{body.loan_id}:{month_key}"
-    interest_rows=await db.transactions.find({"tenant_id":tenant_id,"loan_interest_key":interest_key}).to_list(100)
-    interest_already=round(sum(float(x.get("loan_interest_collected",0) or 0) for x in interest_rows),2)
-    last_month=str(loan.get("last_interest_accrual_month") or str(loan.get("start_date",dt))[:7]); current_month=month_key
+    await tenant_guard(user,tenant_id); db=get_db()
+    if body.idempotency_key:
+        existing=await db.transactions.find_one({"tenant_id":tenant_id,"idempotency_key":body.idempotency_key})
+        if existing:
+            loan_existing=await db.loans.find_one({"_id":parse_oid(body.loan_id),"tenant_id":tenant_id})
+            return {"id":str(existing["_id"]),"amount":float(existing.get("amount",0) or 0),"principal":float(existing.get("principal_repaid",0) or 0),"interest":float(existing.get("loan_interest_collected",0) or 0),"penalty":float(existing.get("loan_penalty_collected",0) or 0),"principal_remaining":max(0,float(loan_existing.get("principal",0))-float(loan_existing.get("principal_paid",0))) if loan_existing else 0,"interest_remaining":0}
+    lock_key=f"loan-payment:{tenant_id}:{body.loan_id}"; await acquire_operation_lock(lock_key,45)
     try:
-        ly,lm=map(int,last_month.split("-")); cy,cm=map(int,current_month.split("-")); elapsed_months=max(0,(cy-ly)*12+(cm-lm))
-    except Exception: elapsed_months=1
-    if elapsed_months==0 and not interest_rows: elapsed_months=1
-    monthly_interest=max(0.0,round(outstanding_principal*rate/100*elapsed_months,2)-interest_already)
-    overdue=_due_overdue_days(dt,due_day,dt.year,dt.month); per_day_penalty=float(tenant.get("loan_per_day_penalty",0) or 0); penalty_rows=await db.transactions.find({"tenant_id":tenant_id,"loan_penalty_key":penalty_key}).to_list(100); penalty_already=round(sum(float(x.get("loan_penalty_collected",0) or 0) for x in penalty_rows),2); penalty=max(0.0,round(overdue*per_day_penalty,2)-penalty_already)
-    if body.amount is not None: payment=round(float(body.amount),2)
-    else: payment=round(float(body.principal)+float(body.interest),2)
-    if payment<=0: raise HTTPException(400,"Payment must be greater than zero")
-    # Penalty and current-month interest are obligations added to the payment split.
-    # The entered payment is the actual money received; no amount is invented.
-    penalty_paid=min(payment,penalty); remaining=round(payment-penalty_paid,2)
-    interest_paid=round(min(remaining,monthly_interest),2); remaining=round(remaining-interest_paid,2)
-    principal_paid=round(min(remaining,outstanding_principal),2)
-    if body.amount is not None and principal_paid+interest_paid+penalty_paid < payment-0.01:
-        raise HTTPException(400,"Payment exceeds current principal, interest and penalty due")
-    txid=await insert_tx(tenant_id,loan["member_id"],"loan_repayment",payment,body.account,user,loan_id=body.loan_id,principal=principal_paid,interest=interest_paid,loan_interest_collected=interest_paid,loan_penalty_collected=penalty_paid,principal_repaid=principal_paid,loan_penalty_key=penalty_key if penalty_paid else None,loan_interest_key=interest_key if interest_paid else None,overdue_days=overdue,per_day_penalty=per_day_penalty,payment_category="loan_emi",date=dt,note=body.note)
-    await db.loans.update_one({"_id":loan["_id"]},{"$inc":{"principal_paid":principal_paid,"interest_paid":interest_paid,"interest_accrued":monthly_interest,"loan_interest_collected":interest_paid,"loan_penalty_collected":penalty_paid,"principal_repaid":principal_paid},"$set":{"last_payment_date":dt,"last_interest_accrual_month":month_key}})
-    updated=await db.loans.find_one({"_id":loan["_id"]}); remaining_principal=max(0,float(updated.get("principal",0))-float(updated.get("principal_paid",0))); accrued_interest=float(updated.get("interest_accrued",updated.get("expected_interest",0)) or 0); remaining_interest=max(0,accrued_interest-float(updated.get("interest_paid",0) or 0))
-    if remaining_principal<=0.01 and remaining_interest<=0.01:
-        await db.loans.update_one({"_id":loan["_id"]},{"$set":{"status":"closed","closed_at":datetime.now(timezone.utc)}})
-    return {"id":txid,"amount":payment,"principal":principal_paid,"interest":interest_paid,"penalty":penalty_paid,"loan_interest_part":interest_paid,"loan_principal_part":principal_paid,"loan_penalty":penalty_paid,"principal_remaining":round(remaining_principal,2),"interest_remaining":round(remaining_interest,2)}
+        loan=await db.loans.find_one({"_id":parse_oid(body.loan_id),"tenant_id":tenant_id})
+        if not loan: raise HTTPException(404,"Loan not found")
+        if loan.get("status")!="active": raise HTTPException(400,"Loan is already closed")
+        tenant=await group_settings(tenant_id); dt=datetime.combine(body.date or date.today(),datetime.min.time(),tzinfo=timezone.utc)
+        op=float(loan.get("principal_paid",0) or 0); principal=round(float(loan.get("principal",0) or 0),2); outstanding_principal=max(0,principal-op)
+        rate=float(tenant.get("loan_interest_rate_per_month",loan.get("interest_rate",2)) or 0); due_day=int(tenant.get("loan_due_date",loan.get("loan_due_date",10)) or 10)
+        month_key=dt.strftime("%Y-%m"); interest_key=f"loan-interest:{body.loan_id}:{month_key}"; penalty_key=f"loan-penalty:{body.loan_id}:{month_key}"
+        interest_rows=await db.transactions.find({"tenant_id":tenant_id,"loan_interest_key":interest_key}).sort([("date",-1),("created_at",-1),("_id",-1)]).to_list(100)
+        interest_already=round(sum(float(x.get("loan_interest_collected",0) or 0) for x in interest_rows),2)
+        last_month=str(loan.get("last_interest_accrual_month") or str(loan.get("start_date",dt))[:7]); current_month=month_key
+        try:
+            ly,lm=map(int,last_month.split("-")); cy,cm=map(int,current_month.split("-")); elapsed_months=max(0,(cy-ly)*12+(cm-lm))
+        except Exception: elapsed_months=1
+        if elapsed_months==0 and not interest_rows: elapsed_months=1
+        monthly_interest=max(0.0,round(outstanding_principal*rate/100*elapsed_months,2)-interest_already)
+        overdue=_due_overdue_days(dt,due_day,dt.year,dt.month); per_day_penalty=float(tenant.get("loan_per_day_penalty",0) or 0); penalty_rows=await db.transactions.find({"tenant_id":tenant_id,"loan_penalty_key":penalty_key}).sort([("date",-1),("created_at",-1),("_id",-1)]).to_list(100); penalty_already=round(sum(float(x.get("loan_penalty_collected",0) or 0) for x in penalty_rows),2); penalty=max(0.0,round(overdue*per_day_penalty,2)-penalty_already)
+        payment=round(float(body.amount),2) if body.amount is not None else round(float(body.principal)+float(body.interest),2)
+        if payment<=0: raise HTTPException(400,"Payment must be greater than zero")
+        penalty_paid=min(payment,penalty); remaining=round(payment-penalty_paid,2)
+        interest_paid=round(min(remaining,monthly_interest),2); remaining=round(remaining-interest_paid,2)
+        principal_paid=round(min(remaining,outstanding_principal),2)
+        if body.amount is not None and principal_paid+interest_paid+penalty_paid < payment-0.01: raise HTTPException(400,"Payment exceeds current principal, interest and penalty due")
+        txid=await insert_tx(tenant_id,loan["member_id"],"loan_repayment",payment,body.account,user,loan_id=body.loan_id,principal=principal_paid,interest=interest_paid,loan_interest_collected=interest_paid,loan_penalty_collected=penalty_paid,principal_repaid=principal_paid,loan_penalty_key=penalty_key if penalty_paid else None,loan_interest_key=interest_key if interest_paid else None,overdue_days=overdue,per_day_penalty=per_day_penalty,payment_category="loan_emi",date=dt,note=body.note,idempotency_key=body.idempotency_key)
+        await db.loans.update_one({"_id":loan["_id"]},{"$inc":{"principal_paid":principal_paid,"interest_paid":interest_paid,"interest_accrued":monthly_interest,"loan_interest_collected":interest_paid,"loan_penalty_collected":penalty_paid,"principal_repaid":principal_paid},"$set":{"last_payment_date":dt,"last_interest_accrual_month":month_key}})
+        updated=await db.loans.find_one({"_id":loan["_id"]}); remaining_principal=max(0,float(updated.get("principal",0))-float(updated.get("principal_paid",0))); accrued_interest=float(updated.get("interest_accrued",updated.get("expected_interest",0)) or 0); remaining_interest=max(0,accrued_interest-float(updated.get("interest_paid",0) or 0))
+        if remaining_principal<=0.01 and remaining_interest<=0.01: await db.loans.update_one({"_id":loan["_id"]},{"$set":{"status":"closed","closed_at":datetime.now(timezone.utc)}})
+        return {"id":txid,"amount":payment,"principal":principal_paid,"interest":interest_paid,"penalty":penalty_paid,"loan_interest_part":interest_paid,"loan_principal_part":principal_paid,"loan_penalty_part":penalty_paid,"principal_remaining":round(remaining_principal,2),"interest_remaining":round(remaining_interest,2)}
+    finally:
+        await release_operation_lock(lock_key)
 
 @router.post("/{tenant_id}/loan-requests")
 async def loan_request(tenant_id:str,body:LoanRequestCreate,user=Depends(current_user)):
@@ -1131,9 +1215,21 @@ async def loan_request(tenant_id:str,body:LoanRequestCreate,user=Depends(current
     member_id=str(user.get("member_id") or "");
     if not member_id: raise HTTPException(400,"Member profile is required")
     elig=await loan_eligibility(tenant_id,member_id,body.amount,body.months,user=user)
+    if not elig["liquidity_ok"]:
+        raise HTTPException(400,f"Group account balance is currently low (₹{float(elig['active_account_balance']):,.2f}). Loan requests are paused.")
     if not elig["eligible"]: raise HTTPException(400,"Requested amount exceeds your current credit eligibility or available group funds")
-    now=datetime.now(timezone.utc); doc={"tenant_id":tenant_id,"member_id":member_id,"amount":body.amount,"months":body.months,"purpose":body.purpose,"status":"pending","approval_records":[],"loan_approval_records":[],"created_at":now}
-    r=await get_db().loan_requests.insert_one(doc); await audit(tenant_id,user,"LOAN_REQUESTED","loan_request",str(r.inserted_id),{"amount":body.amount}); await _create_notification(tenant_id,role="admin",source_key=f"loan-request:{r.inserted_id}",title="New loan request",body=f"A member has requested ₹{float(body.amount):,.2f}.",created_at=now); return {"id":str(r.inserted_id),"credit_limit":elig["credit_limit"]}
+    now=datetime.now(timezone.utc)
+    if body.idempotency_key:
+        existing=await get_db().loan_requests.find_one({"tenant_id":tenant_id,"idempotency_key":body.idempotency_key})
+        if existing: return {"id":str(existing["_id"]),"credit_limit":elig["credit_limit"],"loan_apply_date":str(existing.get("loan_apply_date",now.date()))[:10],"requested_start_date":str(existing.get("requested_start_date",now.date()))[:10]}
+    apply_date=body.loan_apply_date or now.date()
+    min_months=max(0,int((await group_settings(tenant_id)).get("min_advance_apply_months",2) or 2))
+    start_date=body.requested_start_date or _add_months(apply_date,min_months)
+    months_ahead=(start_date.year-apply_date.year)*12+(start_date.month-apply_date.month)
+    if months_ahead<min_months:
+        raise HTTPException(400,f"Loans must be requested at least {min_months} months in advance as per group policy.")
+    doc={"tenant_id":tenant_id,"member_id":member_id,"amount":body.amount,"months":body.months,"purpose":body.purpose,"loan_apply_date":datetime.combine(apply_date,datetime.min.time(),tzinfo=timezone.utc),"requested_start_date":datetime.combine(start_date,datetime.min.time(),tzinfo=timezone.utc),"status":"pending","idempotency_key":body.idempotency_key,"approval_records":[],"loan_approval_records":[],"created_at":now}
+    r=await get_db().loan_requests.insert_one(doc); await audit(tenant_id,user,"LOAN_REQUESTED","loan_request",str(r.inserted_id),{"amount":body.amount,"loan_apply_date":str(apply_date),"requested_start_date":str(start_date)}); await _create_notification(tenant_id,role="admin",source_key=f"loan-request:{r.inserted_id}",title="New loan request",body=f"A member has requested ₹{float(body.amount):,.2f}.",created_at=now); return {"id":str(r.inserted_id),"credit_limit":elig["credit_limit"],"loan_apply_date":str(apply_date),"requested_start_date":str(start_date)}
 
 @router.get("/{tenant_id}/loan-requests")
 async def loan_requests(tenant_id:str,user=Depends(current_user)):
@@ -1147,29 +1243,43 @@ async def loan_requests(tenant_id:str,user=Depends(current_user)):
 
 @router.patch("/{tenant_id}/loan-requests/{request_id}")
 async def decide_loan_request(tenant_id:str,request_id:str,body:LoanRequestDecision,user=Depends(admin_user)):
-    await tenant_guard(user,tenant_id); db=get_db(); req=await db.loan_requests.find_one({"_id":parse_oid(request_id),"tenant_id":tenant_id})
-    if not req: raise HTTPException(404,"Loan request not found")
-    if req.get("status") in ("approved","rejected"): raise HTTPException(400,"Request already decided")
-    if body.decision=="rejected":
-        await db.loan_requests.update_one({"_id":req["_id"]},{"$set":{"status":"rejected","decision_note":body.note or "Rejected by administrator","decided_at":datetime.now(timezone.utc),"rejected_by":str(user["_id"])}})
-        await audit(tenant_id,user,"LOAN_REQUEST_REJECTED","loan_request",request_id,{"reason":body.note or "Rejected by administrator"}); return {"ok":True,"status":"rejected"}
-    tenant=await group_settings(tenant_id); required=int(tenant.get("required_admin_approvals",1) or 1); uid=str(user["_id"]); approvals=[str(x) for x in req.get("approval_records",req.get("loan_approval_records",[]))]
-    if uid not in approvals: approvals.append(uid)
-    if len(approvals)<required:
-        await db.loan_requests.update_one({"_id":req["_id"]},{"$set":{"status":"pending","approval_records":approvals,"loan_approval_records":approvals,"last_approved_at":datetime.now(timezone.utc)}})
-        await audit(tenant_id,user,"LOAN_REQUEST_APPROVAL_RECORDED","loan_request",request_id,{"approval_count":len(approvals),"required":required})
-        return {"ok":True,"status":"pending","approval_count":len(approvals),"required_admin_approvals":required}
-    principal=body.principal or req["amount"]; rate=body.interest_rate if body.interest_rate is not None else float(tenant.get("loan_interest_rate_per_month",2) or 0); months=body.months or 2
-    # Recheck reserve/eligibility at the moment of final approval.
-    elig=await loan_eligibility(tenant_id,req["member_id"],principal,months,user=user)
-    if not elig["eligible"]:
-        reason="Insufficient Group Funds" if elig["funds_available_for_disbursement"]<principal else "Loan exceeds member credit eligibility"
-        await db.loan_requests.update_one({"_id":req["_id"]},{"$set":{"status":"rejected","decision_note":reason,"rejected_by":"system","decided_at":datetime.now(timezone.utc),"approval_records":approvals,"loan_approval_records":approvals}})
-        await _create_notification(tenant_id,role="member",member_id=req["member_id"],source_key=f"loan-request-reject:{req['_id']}",title="Loan request rejected",body=("Insufficient Group Funds" if reason=="Insufficient Group Funds" else reason),created_at=datetime.now(timezone.utc))
-        return {"ok":True,"status":"rejected","reason":reason}
-    await db.loan_requests.update_one({"_id":req["_id"]},{"$set":{"status":"approved","decision_note":body.note,"decided_at":datetime.now(timezone.utc),"approval_records":approvals,"loan_approval_records":approvals}})
-    created=await create_loan(tenant_id,LoanCreate(member_id=req["member_id"],principal=principal,interest_rate=rate,months=months,account=body.account,purpose=req.get("purpose", "")),user)
-    return {"ok":True,"status":"approved","approval_count":len(approvals),"required_admin_approvals":required,"loan":created}
+    await tenant_guard(user,tenant_id); db=get_db(); lock_key=f"loan-request:{tenant_id}:{request_id}"; await acquire_operation_lock(lock_key,45)
+    try:
+        req=await db.loan_requests.find_one({"_id":parse_oid(request_id),"tenant_id":tenant_id})
+        if not req: raise HTTPException(404,"Loan request not found")
+        if req.get("status") in ("approved","rejected"):
+            if req.get("loan_id"): return {"ok":True,"status":req.get("status"),"loan":{"id":str(req["loan_id"])}}
+            raise HTTPException(400,"Request already decided")
+        if body.decision=="rejected":
+            await db.loan_requests.update_one({"_id":req["_id"]},{"$set":{"status":"rejected","decision_note":body.note or "Rejected by administrator","decided_at":datetime.now(timezone.utc),"rejected_by":str(user["_id"])}})
+            await audit(tenant_id,user,"LOAN_REQUEST_REJECTED","loan_request",request_id,{"reason":body.note or "Rejected by administrator"}); return {"ok":True,"status":"rejected"}
+        tenant=await group_settings(tenant_id); required=int(tenant.get("required_admin_approvals",1) or 1); uid=str(user["_id"]); approvals=[str(x) for x in req.get("approval_records",req.get("loan_approval_records",[]))]
+        if uid not in approvals: approvals.append(uid)
+        if len(approvals)<required:
+            await db.loan_requests.update_one({"_id":req["_id"]},{"$set":{"status":"pending","approval_records":approvals,"loan_approval_records":approvals,"last_approved_at":datetime.now(timezone.utc)}})
+            await audit(tenant_id,user,"LOAN_REQUEST_APPROVAL_RECORDED","loan_request",request_id,{"approval_count":len(approvals),"required":required})
+            return {"ok":True,"status":"pending","approval_count":len(approvals),"required_admin_approvals":required}
+        principal=body.principal or req["amount"]; rate=body.interest_rate if body.interest_rate is not None else float(tenant.get("loan_interest_rate_per_month",2) or 0); months=body.months or 2
+        apply_value=req.get("loan_apply_date") or req.get("created_at") or datetime.now(timezone.utc); apply_date=apply_value.date() if hasattr(apply_value,"date") else datetime.now(timezone.utc).date()
+        start_value=req.get("requested_start_date") or req.get("loan_apply_date") or datetime.now(timezone.utc); requested_start=start_value.date() if hasattr(start_value,"date") else datetime.now(timezone.utc).date()
+        min_months=max(0,int(tenant.get("min_advance_apply_months",2) or 2))
+        if not req.get("requested_start_date") and not req.get("loan_apply_date"): requested_start=_add_months(apply_date,min_months)
+        months_ahead=(requested_start.year-apply_date.year)*12+(requested_start.month-apply_date.month)
+        if months_ahead<min_months:
+            await db.loan_requests.update_one({"_id":req["_id"]},{"$set":{"status":"rejected","decision_note":f"Loans must be requested at least {min_months} months in advance as per group policy.","rejected_by":"system","decided_at":datetime.now(timezone.utc)}})
+            return {"ok":True,"status":"rejected","reason":"advance_rule"}
+        elig=await loan_eligibility(tenant_id,req["member_id"],principal,months,user=user)
+        if not elig["eligible"]:
+            reason="Insufficient Group Funds" if elig["funds_available_for_disbursement"]<principal else "Loan exceeds member credit eligibility"
+            await db.loan_requests.update_one({"_id":req["_id"]},{"$set":{"status":"rejected","decision_note":reason,"rejected_by":"system","decided_at":datetime.now(timezone.utc),"approval_records":approvals,"loan_approval_records":approvals}})
+            await _create_notification(tenant_id,role="member",member_id=req["member_id"],source_key=f"loan-request-reject:{req['_id']}",title="Loan request rejected",body=reason,created_at=datetime.now(timezone.utc))
+            return {"ok":True,"status":"rejected","reason":reason}
+        idem=f"loan-request-approval:{request_id}"
+        created=await create_loan(tenant_id,LoanCreate(member_id=req["member_id"],principal=principal,interest_rate=rate,months=months,account=body.account,purpose=req.get("purpose", ""),date=requested_start,idempotency_key=idem),user)
+        await db.loan_requests.update_one({"_id":req["_id"]},{"$set":{"status":"approved","decision_note":body.note,"decided_at":datetime.now(timezone.utc),"approval_records":approvals,"loan_approval_records":approvals,"loan_id":parse_oid(created["id"])}})
+        return {"ok":True,"status":"approved","approval_count":len(approvals),"required_admin_approvals":required,"loan":created}
+    finally:
+        await release_operation_lock(lock_key)
 
 async def ensure_expense_allocations(tenant_id:str,expense_doc):
     db=get_db()
@@ -1197,9 +1307,12 @@ async def ensure_expense_allocations(tenant_id:str,expense_doc):
 @router.post("/{tenant_id}/expenses")
 async def expense(tenant_id:str,body:ExpenseCreate,user=Depends(admin_user)):
     await tenant_guard(user,tenant_id); db=get_db(); now=datetime.now(timezone.utc); dt=datetime.combine(body.date or date.today(),datetime.min.time(),tzinfo=timezone.utc)
+    if body.idempotency_key:
+        existing=await db.expenses.find_one({"tenant_id":tenant_id,"idempotency_key":body.idempotency_key})
+        if existing: return {"id":str(existing["_id"])}
     if not await db.expense_categories.find_one({"tenant_id":tenant_id,"name":body.category}):
         await db.expense_categories.insert_one({"tenant_id":tenant_id,"name":body.category,"created_at":now})
-    expense_doc={**body.model_dump(),"tenant_id":tenant_id,"date":dt,"created_at":now,"proof_url":None,"proof_public_id":None,"amount_minor":int(round(float(body.amount)*100))}
+    expense_doc={**body.model_dump(),"tenant_id":tenant_id,"date":dt,"created_at":now,"proof_url":None,"proof_public_id":None,"idempotency_key":body.idempotency_key,"amount_minor":int(round(float(body.amount)*100))}
     r=await db.expenses.insert_one(expense_doc)
     expense_doc["_id"]=r.inserted_id
     await _feed_upsert(expense_doc,source_type="expense")
@@ -1213,7 +1326,7 @@ async def expense(tenant_id:str,body:ExpenseCreate,user=Depends(admin_user)):
 async def expenses(tenant_id:str,user=Depends(admin_user),page:int|None=None,page_size:int=10):
     await tenant_guard(user,tenant_id); db=get_db(); q={"tenant_id":tenant_id}
     if page is None:
-        rows=await db.expenses.find(q).sort("date",-1).to_list(5000); return [serialize(x) for x in rows]
+        rows=await db.expenses.find(q).sort([("date",-1),("created_at",-1),("_id",-1)]).limit(200).to_list(200); return [serialize(x) for x in rows]
     page=max(1,page); page_size=max(1,min(page_size,50)); rows=await db.expenses.find(q).sort([("date",-1),("created_at",-1),("_id",-1)]).skip((page-1)*page_size).limit(page_size).to_list(page_size); total=await db.expenses.count_documents(q)
     agg=await db.expenses.aggregate([{"$match":q},{"$group":{"_id":None,"total":{"$sum":{"$convert":{"input":{"$ifNull":["$amount",0]},"to":"double","onError":0,"onNull":0}}}}}]).to_list(1); grand=float((agg[0] if agg else {}).get("total",0) or 0)
     return {"items":[serialize(x) for x in rows],"page":page,"page_size":page_size,"total":total,"grand_total":round(grand,2),"has_more":page*page_size<total}
@@ -1313,6 +1426,6 @@ async def passbook_summary(tenant_id:str,member_id:str,from_date:date|None=None,
 async def audit_logs(tenant_id:str,user=Depends(require_roles("super_admin")),page:int|None=None,page_size:int=10):
     await tenant_guard(user,tenant_id); db=get_db(); q={"tenant_id":tenant_id}
     if page is None:
-        rows=await db.audit_logs.find(q).sort("created_at",-1).to_list(5000); return [serialize(x) for x in rows]
+        rows=await db.audit_logs.find(q).sort([("created_at",-1),("_id",-1)]).limit(200).to_list(200); return [serialize(x) for x in rows]
     page=max(1,page); page_size=max(1,min(page_size,50)); rows=await db.audit_logs.find(q).sort([("created_at",-1),("_id",-1)]).skip((page-1)*page_size).limit(page_size).to_list(page_size); total=await db.audit_logs.count_documents(q)
     return {"items":[serialize(x) for x in rows],"page":page,"page_size":page_size,"total":total,"has_more":page*page_size<total}

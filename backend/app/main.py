@@ -26,11 +26,32 @@ async def lifespan(app: FastAPI):
         })
     import asyncio
     asyncio.create_task(backfill_legacy_expense_allocations())
-    asyncio.create_task(backfill_financial_feed())
+    async def _backfill_tenants():
+        async for t in db.tenants.find({}, {"_id":1}):
+            await backfill_financial_feed(str(t["_id"]))
+    asyncio.create_task(_backfill_tenants())
     yield
     await close_db()
 
 app = FastAPI(title="Bharat Bachat API", version="1.0.0", lifespan=lifespan)
+
+# Lightweight per-process authentication throttle. This is intentionally conservative
+# and complements (rather than replaces) an edge/WAF rate limit in production.
+_login_attempts = {}
+
+
+@app.middleware("http")
+async def auth_rate_limit(request: Request, call_next):
+    import time
+    if request.method == "POST" and request.url.path == "/api/auth/login":
+        key=request.client.host if request.client else "unknown"
+        now=time.time(); window_start=now-60
+        attempts=[x for x in _login_attempts.get(key,[]) if x>window_start]
+        if len(attempts)>=20:
+            from fastapi.responses import JSONResponse
+            return JSONResponse({"detail":"Too many login attempts. Please try again shortly."},status_code=429,headers={"Retry-After":"60"})
+        attempts.append(now); _login_attempts[key]=attempts
+    return await call_next(request)
 
 @app.middleware("http")
 async def request_timing(request: Request, call_next):

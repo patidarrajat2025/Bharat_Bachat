@@ -23,7 +23,7 @@ async def tenants(user=Depends(require_roles("super_admin"))):
 async def create_tenant(body:TenantCreate,user=Depends(require_roles("super_admin"))):
     db=get_db(); code=body.code.strip().upper()
     if await db.tenants.find_one({"$or":[{"name":body.name.strip()},{"code":code}]}): raise HTTPException(409,"Group name or code already exists")
-    now=datetime.now(timezone.utc); doc={"name":body.name.strip(),"code":code,"opening_cash":body.opening_cash,"opening_bank":body.opening_bank,"kist_per_share":body.kist_per_share,"bc_due_date":10,"bc_per_day_penalty":0,"loan_interest_rate_per_month":2,"loan_per_day_penalty":0,"loan_due_date":10,"required_admin_approvals":1,"max_loan_multiplier":20,"min_group_reserve_balance":0,"min_loan_amount":10000,"logo_url":body.logo_url,"logo_public_id":None,"active":True,"created_at":now}
+    now=datetime.now(timezone.utc); doc={"name":body.name.strip(),"code":code,"opening_cash":body.opening_cash,"opening_bank":body.opening_bank,"kist_per_share":body.kist_per_share,"bc_due_date":10,"bc_per_day_penalty":0,"loan_interest_rate_per_month":2,"loan_per_day_penalty":0,"loan_due_date":10,"required_admin_approvals":1,"max_loan_multiplier":20,"min_group_reserve_balance":0,"min_loan_amount":10000,"min_advance_apply_months":2,"logo_url":body.logo_url,"logo_public_id":None,"active":True,"created_at":now}
     r=await db.tenants.insert_one(doc); await audit(str(r.inserted_id),user,"GROUP_CREATED","tenant",str(r.inserted_id),{"name":body.name,"code":code}); return {"id":str(r.inserted_id)}
 
 @router.patch("/tenants/{tenant_id}/settings")

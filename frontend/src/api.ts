@@ -16,6 +16,7 @@ type CacheEntry={expiresAt:number;value:unknown};
 const getCache = new Map<string,CacheEntry>();
 const GET_TTL_MS = 5000;
 const API_TIMING_LOG = String(import.meta.env.VITE_API_TIMING_LOG ?? 'true').toLowerCase() !== 'false';
+const recentMutationKeys = new Map<string,{key:string;expiresAt:number}>();
 
 function logApiTiming(message:string, data?:unknown){
   if(!API_TIMING_LOG || typeof console === 'undefined') return;
@@ -24,6 +25,18 @@ function logApiTiming(message:string, data?:unknown){
 }
 
 export function invalidateApiCache(){ getCache.clear(); }
+
+function withIdempotency(body:any){
+  if(!body || typeof body!=="object" || Array.isArray(body)) return body;
+  if(body.idempotency_key) return body;
+  const fingerprint=JSON.stringify(body);
+  const now=Date.now();
+  const cached=recentMutationKeys.get(fingerprint);
+  if(cached && cached.expiresAt>now) return {...body,idempotency_key:cached.key};
+  const key=typeof crypto!=="undefined" && typeof crypto.randomUUID==="function" ? crypto.randomUUID() : `bb-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  recentMutationKeys.set(fingerprint,{key,expiresAt:now+10000});
+  return {...body,idempotency_key:key};
+}
 
 async function request<T>(path:string,options:RequestInit={}):Promise<T>{
   const token=localStorage.getItem('bb-token');
@@ -145,27 +158,28 @@ export const api={
   loanEligibility:(tid:string,memberId:string,amount?:number,months?:number)=>{const q=new URLSearchParams();if(amount!==undefined&&amount>0)q.set('amount',String(amount));if(months!==undefined)q.set('months',String(months));const qs=q.toString();return request<any>(`/group/${tid}/loan-eligibility/${memberId}${qs?`?${qs}`:''}`)},
  personalLoanOverview:(tid:string)=>request<any>(`/group/${tid}/personal-loan-overview`),
  transactions:(tid:string,params='')=>request<Transaction[]>(`/group/${tid}/transactions${params}`),
+ reverseTransaction:(tid:string,id:string)=>request<any>(`/group/${tid}/transactions/${id}/reverse`,{method:'POST',body:JSON.stringify({idempotency_key:`reversal:${id}`})}),
  groupActivity:(tid:string,page=1,pageSize=10)=>request<any>(`/group/${tid}/activity?page=${page}&page_size=${pageSize}`),
- contributions:(tid:string,b:any)=>request<any>(`/group/${tid}/contributions`,{method:'POST',body:JSON.stringify(b)}),
+ contributions:(tid:string,b:any)=>request<any>(`/group/${tid}/contributions`,{method:'POST',body:JSON.stringify(withIdempotency(b))}),
  monthlyKistSummary:(tid:string,period:string)=>request<any>(`/group/${tid}/monthly-kist-summary?period=${encodeURIComponent(period)}`),
  monthlyKistStatus:(tid:string,mid:string,period:string)=>request<any>(`/group/${tid}/monthly-kist/${mid}?period=${encodeURIComponent(period)}`),
- monthlyKist:(tid:string,b:any)=>request<any>(`/group/${tid}/monthly-kist`,{method:'POST',body:JSON.stringify(b)}),
+ monthlyKist:(tid:string,b:any)=>request<any>(`/group/${tid}/monthly-kist`,{method:'POST',body:JSON.stringify(withIdempotency(b))}),
  monthlyKistBulkStatus:(tid:string,period:string)=>request<any>(`/group/${tid}/monthly-kist-bulk-status?period=${encodeURIComponent(period)}`),
- monthlyKistBulk:(tid:string,b:any)=>request<any>(`/group/${tid}/monthly-kist-bulk`,{method:'POST',body:JSON.stringify(b)}),
- moneyIn:(tid:string,b:any)=>request<any>(`/group/${tid}/money-in`,{method:'POST',body:JSON.stringify(b)}),
+ monthlyKistBulk:(tid:string,b:any)=>request<any>(`/group/${tid}/monthly-kist-bulk`,{method:'POST',body:JSON.stringify(withIdempotency(b))}),
+ moneyIn:(tid:string,b:any)=>request<any>(`/group/${tid}/money-in`,{method:'POST',body:JSON.stringify(withIdempotency(b))}),
  loans:(tid:string,memberId?:string)=>request<Loan[]>(`/group/${tid}/loans${memberId?`?member_id=${encodeURIComponent(memberId)}`:''}`),
  loansPage:(tid:string,page=1,pageSize=10,memberId?:string)=>{const q=new URLSearchParams({page:String(page),page_size:String(pageSize)});if(memberId)q.set('member_id',memberId);return request<any>(`/group/${tid}/loans?${q.toString()}`)},
  groupLoans:(tid:string)=>request<any[]>(`/group/${tid}/group-loans`),
- createLoan:(tid:string,b:any)=>request<any>(`/group/${tid}/loans`,{method:'POST',body:JSON.stringify(b)}),
- loanPayment:(tid:string,b:any)=>request<any>(`/group/${tid}/loan-payments`,{method:'POST',body:JSON.stringify(b)}),
+ createLoan:(tid:string,b:any)=>request<any>(`/group/${tid}/loans`,{method:'POST',body:JSON.stringify(withIdempotency(b))}),
+ loanPayment:(tid:string,b:any)=>request<any>(`/group/${tid}/loan-payments`,{method:'POST',body:JSON.stringify(withIdempotency(b))}),
  loanRequests:(tid:string)=>request<any[]>(`/group/${tid}/loan-requests`),
- createLoanRequest:(tid:string,b:any)=>request<any>(`/group/${tid}/loan-requests`,{method:'POST',body:JSON.stringify(b)}),
+ createLoanRequest:(tid:string,b:any)=>request<any>(`/group/${tid}/loan-requests`,{method:'POST',body:JSON.stringify(withIdempotency(b))}),
  decideLoanRequest:(tid:string,rid:string,b:any)=>request<any>(`/group/${tid}/loan-requests/${rid}`,{method:'PATCH',body:JSON.stringify(b)}),
  expenses:(tid:string)=>request<any[]>(`/group/${tid}/expenses`),
  expensesPage:(tid:string,page=1,pageSize=10)=>request<any>(`/group/${tid}/expenses?page=${page}&page_size=${pageSize}`),
  categories:(tid:string)=>request<any[]>(`/group/${tid}/expense-categories`),
  createCategory:(tid:string,b:any)=>request<any>(`/group/${tid}/expense-categories`,{method:'POST',body:JSON.stringify(b)}),
- createExpense:(tid:string,b:any)=>request<any>(`/group/${tid}/expenses`,{method:'POST',body:JSON.stringify(b)}),
+ createExpense:(tid:string,b:any)=>request<any>(`/group/${tid}/expenses`,{method:'POST',body:JSON.stringify(withIdempotency(b))}),
  audit:(tid:string)=>request<any[]>(`/group/${tid}/audit`),
  auditPage:(tid:string,page=1,pageSize=10)=>request<any>(`/group/${tid}/audit?page=${page}&page_size=${pageSize}`),
  uploadExpenseProof:(tid:string,id:string,file:File)=>{const fd=new FormData();fd.append('file',file);return request<any>(`/group/${tid}/expenses/${id}/proof`,{method:'POST',body:fd})},

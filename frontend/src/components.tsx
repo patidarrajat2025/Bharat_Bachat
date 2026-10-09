@@ -41,11 +41,11 @@ const nav=[
 
 
 export function ThemeSettings({onDone}:{onDone?:()=>void}={}){
-  const {i18n}=useTranslation();
+  const {i18n}=useTranslation(); const {tenant}=useStore();
   const setLanguage=()=>{const n=i18n.language==='en'?'hi':'en';i18n.changeLanguage(n);localStorage.setItem('bb-lang',n);document.documentElement.lang=n};
   return <div className="settings-panel">
     <div className="settings-row"><div><b>{tr('Language')}</b><span>{tr('Choose app language')}</span></div><button className="setting-pill" onClick={setLanguage}><span className="language-code">{i18n.language==='en'?'EN':'HI'}</span></button></div>
-    <div className="settings-row settings-theme-row"><div><b>{tr('Theme')}</b><span>{tr('Bharat Bachat banking visual system')}</span></div><div className="theme-choice active figma-theme-lock"><span className="theme-swatch" style={{background:'linear-gradient(135deg,#047857,#065F46)'}}/><span>{tr('Bharat Bachat')}</span><Check size={14}/></div></div>
+    <div className="settings-row settings-theme-row"><div><b>{tr('Theme')}</b><span>{tenant?.name||tr('Group')} {tr('visual system')}</span></div><div className="theme-choice active figma-theme-lock"><span className="theme-swatch" style={{background:'linear-gradient(135deg,#047857,#065F46)'}}/><span>{tenant?.name||tr('Group')}</span><Check size={14}/></div></div>
     {onDone&&<button type="button" className="btn-primary w-full mt-3" onClick={onDone}>{tr('Done')}</button>}
   </div>
 }
@@ -198,8 +198,10 @@ export function ListCard({children,className='',onClick}:{children:ReactNode;cla
 }
 
 export function PageTitle({title,subtitle}:{title:string;subtitle?:string}){
+  const {tenant}=useStore();
+  const groupName=tenant?.name||tr('Group');
   return <div className="page-heading figma-page-heading">
-    <div className="page-heading-copy"><span className="page-heading-kicker">Bharat Bachat</span><h1>{title}</h1>{subtitle&&<p>{subtitle}</p>}</div>
+    <div className="page-heading-copy"><span className="page-heading-kicker">{groupName}</span><h1>{title}</h1>{subtitle&&<p>{subtitle}</p>}</div>
   </div>;
 }
 
