@@ -39,9 +39,12 @@ async def tenant_logo(tenant_id:str,file:UploadFile=File(...),user=Depends(requi
     if file.content_type not in {"image/jpeg","image/png","image/webp"}: raise HTTPException(415,"Only JPG, PNG or WebP images are allowed")
     data=await file.read()
     if len(data)>settings.max_upload_mb*1024*1024: raise HTTPException(413,"File too large")
-    if t.get("logo_public_id"): delete_asset(t["logo_public_id"])
-    r=upload_bytes(data,public_id="logo",folder=f"bharat-bachat/tenants/{tenant_id}",resource_type="image")
-    await db.tenants.update_one({"_id":t["_id"]},{"$set":{"logo_url":r.get("secure_url"),"logo_public_id":r.get("public_id")}}); await audit(tenant_id,user,"GROUP_LOGO_UPDATED","tenant",tenant_id); return {"logo_url":r.get("secure_url")}
+    r=upload_bytes(data,public_id=f"logo-{datetime.now(timezone.utc).strftime('%Y%m%d%H%M%S%f')}",folder=f"bharat-bachat/tenants/{tenant_id}",resource_type="image")
+    await db.tenants.update_one({"_id":t["_id"]},{"$set":{"logo_url":r.get("secure_url"),"logo_public_id":r.get("public_id")}})
+    if t.get("logo_public_id") and t.get("logo_public_id")!=r.get("public_id"):
+        try: delete_asset(t["logo_public_id"])
+        except Exception: pass
+    await audit(tenant_id,user,"GROUP_LOGO_UPDATED","tenant",tenant_id); return {"logo_url":r.get("secure_url")}
 
 @router.patch("/tenants/{tenant_id}/status")
 async def tenant_status(tenant_id:str,body:UserStatus,user=Depends(require_roles("super_admin"))):

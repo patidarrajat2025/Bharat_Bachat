@@ -1704,7 +1704,7 @@ body{background:linear-gradient(145deg,#F1F9F5 0%,#FFFFFF 48%,#EDF7F2 100%)}
 /* Uniform action-sheet / more-drawer icon rhythm */
 .more-item svg,.action-sheet-item svg{width:24px!important;height:24px!important;flex:0 0 24px}
 
-.bb-toast{position:fixed;z-index:9999;left:50%;bottom:calc(82px + env(safe-area-inset-bottom));transform:translateX(-50%);max-width:min(88vw,420px);padding:11px 16px;border:1px solid #cfe3da;border-radius:999px;background:rgba(20,48,70,.96);color:#fff;font-size:12px;font-weight:800;box-shadow:0 14px 34px rgba(26,43,76,.22);backdrop-filter:blur(12px);animation:bb-toast-in .2s ease-out}
+.bb-toast{position:fixed;z-index:9999;left:50%;bottom:calc(82px + env(safe-area-inset-bottom));transform:translateX(-50%);display:flex;align-items:center;gap:10px;width:max-content;max-width:min(92vw,460px);padding:12px 14px;border:1px solid rgba(255,255,255,.22);border-radius:16px;background:rgba(26,43,76,.97);color:#fff;font-size:13px;font-weight:750;line-height:1.4;box-shadow:0 16px 42px rgba(26,43,76,.24);backdrop-filter:blur(16px);animation:bb-toast-in .2s ease-out}.bb-toast-success{background:rgba(7,95,70,.98);border-color:#a7f3d0}.bb-toast-error{background:rgba(153,27,27,.98);border-color:#fecaca}.bb-toast-info{background:rgba(26,43,76,.97);border-color:#bfdbfe}.bb-toast-icon{display:grid;place-items:center;flex:0 0 23px;width:23px;height:23px;border-radius:50%;background:rgba(255,255,255,.16);font-size:14px;font-weight:950}.bb-toast>span:nth-child(2){min-width:0;overflow-wrap:anywhere}.bb-toast-close{display:grid;place-items:center;flex:0 0 28px;width:28px;height:28px;margin-left:2px;border:0;border-radius:9px;background:rgba(255,255,255,.1);color:inherit;font-size:20px;line-height:1}.bb-toast-close:hover{background:rgba(255,255,255,.2)}
 @keyframes bb-toast-in{from{opacity:0;transform:translate(-50%,8px)}to{opacity:1;transform:translate(-50%,0)}}
 
 
@@ -2306,7 +2306,7 @@ button,.btn-primary,.btn-secondary{min-height:var(--bb-ui-touch);font-size:15px!
 .figma-header .header-brand{min-height:52px!important}
 .figma-header .header-brand .brand-mark-lg{width:46px!important;height:46px!important;border-radius:14px!important}
 .figma-header .header-app-title{font-size:21px!important;font-weight:900!important;letter-spacing:-.025em!important}
-.figma-header .header-context-name{font-size:14px!important;font-weight:800!important}
+.figma-header .header-context-name{font-size:14px!important;font-weight:800!important;color:#fff!important}
 .figma-header .header-context-role{font-size:12px!important;font-weight:700!important}
 .figma-header .header-icon-btn,.figma-header .profile-trigger{min-width:48px!important;min-height:48px!important}
 
@@ -2400,9 +2400,13 @@ html,body,#root{max-width:100%;overflow-x:hidden}
 
 @media(max-width:760px){
   .figma-header .app-header-inner{height:68px!important;min-height:68px!important;padding:0 12px!important;gap:9px!important}
-  .figma-header .header-brand .brand-mark-lg{width:42px!important;height:42px!important}
-  .figma-header .header-app-title{font-size:18px!important}
-  .figma-header .header-context{display:none!important}
+  .figma-header .header-brand{min-width:0!important;flex:0 1 auto!important;gap:7px!important}
+  .figma-header .header-brand .brand-mark-lg{width:38px!important;height:38px!important}
+  .figma-header .header-app-title{font-size:14px!important;max-width:94px!important;overflow:hidden!important;text-overflow:ellipsis!important;white-space:nowrap!important}
+  .figma-header .header-actions{gap:6px!important;flex:0 0 auto!important}
+  .figma-header .header-context{display:flex!important;flex:1 1 auto!important;max-width:none!important;min-width:0!important;margin-left:0!important;padding:6px 8px!important;gap:6px!important}
+  .figma-header .header-context-name{display:block!important;color:#fff!important;font-size:11px!important;font-weight:800!important;max-width:none!important;min-width:0!important;overflow:hidden!important;text-overflow:ellipsis!important;white-space:nowrap!important}
+  .figma-header .header-context-role{display:none!important}
   .figma-header .header-icon-btn,.figma-header .profile-trigger{min-width:46px!important;min-height:46px!important}
   .page-title h1,.page-heading h1,.figma-page-heading h1{font-size:27px!important}
   .page-title p,.page-heading p,.figma-page-heading p{font-size:14px!important}

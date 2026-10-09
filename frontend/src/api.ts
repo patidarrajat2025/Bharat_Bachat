@@ -16,7 +16,10 @@ type CacheEntry={expiresAt:number;value:unknown};
 const getCache = new Map<string,CacheEntry>();
 const GET_TTL_MS = 5000;
 const API_TIMING_LOG = String(import.meta.env.VITE_API_TIMING_LOG ?? 'true').toLowerCase() !== 'false';
-const recentMutationKeys = new Map<string,{key:string;expiresAt:number}>();
+// Keep retry keys attached to the specific payload object, not its contents.
+// Two intentional equal-amount payments must remain two operations; only a retry
+// that reuses the same payload object should reuse its idempotency key.
+const payloadIdempotencyKeys = new WeakMap<object,string>();
 
 function logApiTiming(message:string, data?:unknown){
   if(!API_TIMING_LOG || typeof console === 'undefined') return;
@@ -24,17 +27,33 @@ function logApiTiming(message:string, data?:unknown){
   else console.info(message, data);
 }
 
+function notifyMutationSuccess(method:string,path:string){
+  if(typeof window==='undefined' || method==='GET') return;
+  // Background notification acknowledgements are intentionally silent.
+  if(/\/notifications\/(?:[^/]+\/read|clear)$/.test(path)) return;
+  const lang=document.documentElement.lang.toLowerCase().startsWith('hi');
+  let message=lang?'बदलाव सफलतापूर्वक सहेजे गए':'Changes saved successfully';
+  if(method==='DELETE') message=lang?'सफलतापूर्वक हटाया गया':'Deleted successfully';
+  else if(/(?:status|activate|deactivate)/i.test(path)) message=lang?'स्थिति सफलतापूर्वक अपडेट हुई':'Status updated successfully';
+  else if(/(?:profile-image|logo|proof)/i.test(path)) message=lang?'फ़ाइल सफलतापूर्वक अपलोड हुई':'File uploaded successfully';
+  else if(method==='POST' && /(?:login|change-password|reset-password)/i.test(path)) return;
+  else if(method==='POST' && /(?:reverse)$/.test(path)) message=lang?'लेन-देन सफलतापूर्वक रिवर्स हुआ':'Transaction reversed successfully';
+  else if(method==='POST' && /(?:payments|money-in|monthly-kist|contributions|repayments|loan-payments)/i.test(path)) message=lang?'भुगतान सफलतापूर्वक दर्ज हुआ':'Payment recorded successfully';
+  else if(method==='POST') message=lang?'सफलतापूर्वक बनाया गया':'Created successfully';
+  else if(method==='PATCH' || method==='PUT') message=lang?'सफलतापूर्वक अपडेट किया गया':'Updated successfully';
+  window.dispatchEvent(new CustomEvent('bb-toast',{detail:{type:'success',message}}));
+}
+
 export function invalidateApiCache(){ getCache.clear(); }
 
 function withIdempotency(body:any){
   if(!body || typeof body!=="object" || Array.isArray(body)) return body;
   if(body.idempotency_key) return body;
-  const fingerprint=JSON.stringify(body);
-  const now=Date.now();
-  const cached=recentMutationKeys.get(fingerprint);
-  if(cached && cached.expiresAt>now) return {...body,idempotency_key:cached.key};
-  const key=typeof crypto!=="undefined" && typeof crypto.randomUUID==="function" ? crypto.randomUUID() : `bb-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  recentMutationKeys.set(fingerprint,{key,expiresAt:now+10000});
+  let key=payloadIdempotencyKeys.get(body);
+  if(!key){
+    key=typeof crypto!=="undefined" && typeof crypto.randomUUID==="function" ? crypto.randomUUID() : `bb-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    payloadIdempotencyKeys.set(body,key);
+  }
   return {...body,idempotency_key:key};
 }
 
@@ -65,11 +84,13 @@ async function request<T>(path:string,options:RequestInit={}):Promise<T>{
       if(!res.ok){
         const b=await res.json().catch(()=>({}));
         if(res.status===401){ localStorage.removeItem('bb-token'); localStorage.removeItem('bb-user'); invalidateApiCache(); }
-        throw new Error(b.detail||`Request failed: ${res.status}`);
+        const fallback:Record<number,string>={400:'Please check the entered information and try again.',401:'Your session has expired. Please sign in again.',403:'You do not have permission to perform this action.',404:'The requested record could not be found.',409:'This change conflicts with the latest data. Refresh and try again.',413:'The selected file is too large.',422:'Some information is invalid. Please review the form.',429:'Too many requests. Please wait a moment and try again.',500:'Something went wrong on our side. Please try again.',502:'The server is temporarily unavailable. Please try again.',503:'The service is temporarily unavailable. Please try again.',504:'The server took too long to respond. Please try again.'};
+        const detail=typeof b.detail==='string'?b.detail:'';
+        throw new Error(detail || fallback[res.status] || `Request failed (${res.status}). Please try again.`);
       }
       const value=await res.json() as T;
       if(key) getCache.set(key,{expiresAt:Date.now()+GET_TTL_MS,value});
-      else invalidateApiCache();
+      else { invalidateApiCache(); notifyMutationSuccess(method,path); }
       const elapsed=(typeof performance !== 'undefined' ? performance.now() : Date.now())-started;
       logApiTiming(`[api:end] ${requestId} ${method} ${path}`,{
         status:res.status,
@@ -112,7 +133,7 @@ export function prefetchGroupRoute(tid:string, route:string, role?:string, membe
     if(role==='member' && memberId) return safe(api.passbook(tid,memberId));
     return safe(api.members(tid).then(ms=>{const first=ms[0]?._id; return first?api.passbook(tid,first):undefined;}));
   }
-  if(route==='/loans') return safe(api.loansOverview(tid));
+  if(route==='/loans') return role==='member'?undefined:safe(api.loansOverview(tid));
   if(route==='/personal-loan') return safe(api.personalLoanOverview(tid));
   if(route==='/admin' && role!=='super_admin') return safe(api.adminOverview(tid));
 }

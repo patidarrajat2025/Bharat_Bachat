@@ -17,7 +17,7 @@ async def _user_payload(user):
     if user.get("member_id"):
         try:
             from bson import ObjectId
-            m=await db.members.find_one({"_id": ObjectId(str(user["member_id"]))})
+            m=await db.members.find_one({"_id": ObjectId(str(user["member_id"])), "tenant_id": str(user.get("tenant_id"))})
             member_image=(m or {}).get("profile_image_url") or (m or {}).get("profile_picture_url")
             if member_image:
                 profile_image_url=member_image
@@ -124,7 +124,7 @@ async def upload_profile_image(file: UploadFile = File(...), user=Depends(curren
     data=await file.read()
     if len(data)>settings.max_upload_mb*1024*1024: raise HTTPException(413,"File too large")
     from bson import ObjectId
-    m=await get_db().members.find_one({"_id":ObjectId(str(user["member_id"]))})
+    m=await get_db().members.find_one({"_id":ObjectId(str(user["member_id"])),"tenant_id":str(user.get("tenant_id"))})
     if not m: raise HTTPException(404,"Member profile not found")
     old_public_id=m.get("profile_image_public_id")
     import uuid
@@ -139,7 +139,7 @@ async def upload_profile_image(file: UploadFile = File(...), user=Depends(curren
 async def delete_profile_image(user=Depends(current_user)):
     if not user.get("member_id"): raise HTTPException(400,"Profile photo is available for member accounts.")
     from bson import ObjectId
-    m=await get_db().members.find_one({"_id":ObjectId(str(user["member_id"]))})
+    m=await get_db().members.find_one({"_id":ObjectId(str(user["member_id"])),"tenant_id":str(user.get("tenant_id"))})
     if not m: raise HTTPException(404,"Member profile not found")
     if m.get("profile_image_public_id"): delete_asset(m["profile_image_public_id"])
     await get_db().members.update_one({"_id":m["_id"]},{"$set":{"profile_image_url":None,"profile_picture_url":None,"profile_image_public_id":None}})

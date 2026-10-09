@@ -21,19 +21,80 @@ router=APIRouter(prefix="/group",tags=["group"])
 _feed_repair_lock=asyncio.Lock()
 
 async def ensure_financial_feed_ready(tenant_id: str):
+    """Repair the accounting read model when source counts OR stored totals drift.
+
+    A total-count-only check can miss a stale feed whose row count matches the
+    source collections (for example, old rows with zero amounts). Compare each
+    source bucket independently and its signed total before trusting the feed.
+    """
     db=get_db()
+
+    async def needs_repair():
+        amount_expr={"$convert":{"input":{"$ifNull":["$amount",0]},"to":"double","onError":0,"onNull":0}}
+        account_expr={"$cond":[{"$in":[{"$ifNull":["$account",""]},[""]] },"cash","$account"]}
+
+        def account_pipeline(match):
+            return [
+                {"$match":match},
+                {"$project":{"amount":amount_expr,"account":account_expr}},
+                {"$group":{"_id":"$account","count":{"$sum":1},"total":{"$sum":"$amount"}}},
+            ]
+
+        tx_count, expense_count, feed_tx_count, feed_expense_count, tx_sum_rows, expense_sum_rows, feed_tx_sum_rows, feed_expense_sum_rows, tx_accounts, expense_accounts, feed_tx_accounts, feed_expense_accounts = await asyncio.gather(
+            db.transactions.count_documents({"tenant_id":tenant_id}),
+            db.expenses.count_documents({"tenant_id":tenant_id}),
+            db.financial_feed.count_documents({"tenant_id":tenant_id,"source_type":"transaction"}),
+            db.financial_feed.count_documents({"tenant_id":tenant_id,"source_type":"expense"}),
+            db.transactions.aggregate([{"$match":{"tenant_id":tenant_id}},{"$group":{"_id":None,"total":{"$sum":amount_expr}}}]).to_list(1),
+            db.expenses.aggregate([{"$match":{"tenant_id":tenant_id}},{"$group":{"_id":None,"total":{"$sum":amount_expr}}}]).to_list(1),
+            db.financial_feed.aggregate([{"$match":{"tenant_id":tenant_id,"source_type":"transaction"}},{"$group":{"_id":None,"total":{"$sum":{"$ifNull":["$amount",0]}}}}]).to_list(1),
+            db.financial_feed.aggregate([{"$match":{"tenant_id":tenant_id,"source_type":"expense"}},{"$group":{"_id":None,"total":{"$sum":{"$ifNull":["$amount",0]}}}}]).to_list(1),
+            db.transactions.aggregate(account_pipeline({"tenant_id":tenant_id})).to_list(None),
+            db.expenses.aggregate(account_pipeline({"tenant_id":tenant_id})).to_list(None),
+            db.financial_feed.aggregate(account_pipeline({"tenant_id":tenant_id,"source_type":"transaction"})).to_list(None),
+            db.financial_feed.aggregate(account_pipeline({"tenant_id":tenant_id,"source_type":"expense"})).to_list(None),
+        )
+        source_tx_total=float((tx_sum_rows[0] if tx_sum_rows else {}).get("total",0) or 0)
+        source_expense_total=float((expense_sum_rows[0] if expense_sum_rows else {}).get("total",0) or 0)
+        feed_tx_total=float((feed_tx_sum_rows[0] if feed_tx_sum_rows else {}).get("total",0) or 0)
+        feed_expense_total=float((feed_expense_sum_rows[0] if feed_expense_sum_rows else {}).get("total",0) or 0)
+
+        def account_buckets(rows, expense_source=False):
+            # Counts and signed totals per account catch Cash/Bank misclassification
+            # even when the global financial-feed sum still matches the source data.
+            buckets={}
+            for row in rows:
+                account=str(row.get("_id") or "cash")
+                total=float(row.get("total",0) or 0)
+                if expense_source:
+                    total=-abs(total)
+                buckets[account]=(int(row.get("count",0) or 0),round(total,2))
+            return buckets
+
+        return (
+            tx_count != feed_tx_count
+            or expense_count != feed_expense_count
+            or abs(source_tx_total-feed_tx_total) > 0.01
+            or abs(-source_expense_total-feed_expense_total) > 0.01
+            or account_buckets(tx_accounts) != account_buckets(feed_tx_accounts)
+            or account_buckets(expense_accounts, expense_source=True) != account_buckets(feed_expense_accounts)
+        )
+
+    # Legacy source rows without an account are treated as cash throughout the
+    # dashboard; normalize the materialized rows to the same default so the
+    # cash statement and group summary agree.
+    await db.financial_feed.update_many({"tenant_id":tenant_id,"$or":[{"account":{"$exists":False}},{"account":None},{"account":""}]},{"$set":{"account":"cash"}})
+    # Normalize legacy positive expense feed rows once. Expense entries are
+    # debits in the universal register and therefore must have a negative sign.
     await db.financial_feed.update_many({"tenant_id":tenant_id,"source_type":"expense","amount":{"$gt":0}},[{"$set":{"amount":{"$multiply":["$amount",-1]},"amount_minor":{"$multiply":["$amount_minor",-1]}}}])
-    tx_count=await db.transactions.count_documents({"tenant_id":tenant_id})
-    expense_count=await db.expenses.count_documents({"tenant_id":tenant_id})
-    feed_count=await db.financial_feed.count_documents({"tenant_id":tenant_id})
-    if feed_count >= tx_count + expense_count:
+    if not await needs_repair():
         return
     async with _feed_repair_lock:
-        tx_count=await db.transactions.count_documents({"tenant_id":tenant_id})
-        expense_count=await db.expenses.count_documents({"tenant_id":tenant_id})
-        feed_count=await db.financial_feed.count_documents({"tenant_id":tenant_id})
-        if feed_count < tx_count + expense_count:
+        if await needs_repair():
             await backfill_financial_feed(tenant_id)
+            # The idempotent backfill refreshes source values. Re-normalize any
+            # legacy expense rows it has just upserted before they are queried.
+            await db.financial_feed.update_many({"tenant_id":tenant_id,"source_type":"expense","amount":{"$gt":0}},[{"$set":{"amount":{"$multiply":["$amount",-1]},"amount_minor":{"$multiply":["$amount_minor",-1]}}}])
 
 def as_id(v): return str(v)
 
@@ -502,6 +563,13 @@ async def monthly_kist_summary(tenant_id:str,period:str,user=Depends(current_use
         {"$group":{"_id":None,"total":{"$sum":{"$convert":{"input":{"$ifNull":["$amount",0]},"to":"double","onError":0,"onNull":0}}}}}
     ]).to_list(1)
     group_expenses=round(float((exp_row[0] if exp_row else {}).get("total",0) or 0),2)
+    member_expenses=None
+    if user["role"]=="member":
+        allocation_row=await db.transactions.aggregate([
+            {"$match":{"tenant_id":tenant_id,"member_id":str(user.get("member_id") or ""),"type":"expense_allocation","date":{"$gte":start,"$lt":end}}},
+            {"$group":{"_id":None,"total":{"$sum":{"$abs":{"$convert":{"input":{"$ifNull":["$amount",0]},"to":"double","onError":0,"onNull":0}}}}}}
+        ]).to_list(1)
+        member_expenses=round(float((allocation_row[0] if allocation_row else {}).get("total",0) or 0),2)
     expected=paid=paid_shares=partial_shares=pending_shares=0.0
     for member in members:
         for share in shares_by_member.get(str(member["_id"]),[]):
@@ -510,7 +578,10 @@ async def monthly_kist_summary(tenant_id:str,period:str,user=Depends(current_use
             if remaining<=0.009: paid_shares+=1
             elif p>0: partial_shares+=1
             else: pending_shares+=1
-    return {"period":period,"expected_total":round(expected,2),"paid_total":round(paid,2),"pending_total":round(max(0,expected-paid),2),"paid_shares":int(paid_shares),"partial_shares":int(partial_shares),"pending_shares":int(pending_shares),"active_members":len(members),"group_expenses":group_expenses}
+    result={"period":period,"expected_total":round(expected,2),"paid_total":round(paid,2),"pending_total":round(max(0,expected-paid),2),"paid_shares":int(paid_shares),"partial_shares":int(partial_shares),"pending_shares":int(pending_shares),"active_members":len(members)}
+    if user["role"]=="member": result["member_expenses"]=member_expenses
+    else: result["group_expenses"]=group_expenses
+    return result
 
 @router.get("/{tenant_id}/monthly-kist/{member_id}")
 async def monthly_kist_status(tenant_id:str,member_id:str,period:str,user=Depends(admin_user)):
@@ -717,7 +788,7 @@ async def group_activity(tenant_id:str,page:int=1,page_size:int=10,user=Depends(
     return {"items":items,"page":page,"page_size":page_size,"has_more":page*page_size<total,"total":total}
 
 @router.get("/{tenant_id}/accounting/{view}")
-async def accounting_view(tenant_id:str, view:str, period:str|None=None, account:str|None=None, filter:str|None=None, page:int=1, page_size:int=10, user=Depends(current_user)):
+async def accounting_view(tenant_id:str, view:str, period:str|None=None, account:str|None=None, filter:str|None=None, page:int=1, page_size:int=10, user=Depends(admin_user)):
     """Accounting drill-down read model.
 
     This endpoint deliberately separates earned income/profit, operating
@@ -773,6 +844,10 @@ async def accounting_view(tenant_id:str, view:str, period:str|None=None, account
             if view=="register":
                 if direction=="inflows": display_feed["amount"]={"$gt":0}
                 elif direction=="outflows": display_feed["amount"]={"$lt":0}
+                elif direction=="opening":
+                    # Opening balance is a starting value, not a transaction
+                    # list. The card should not repeat every ledger entry.
+                    display_feed["_id"]={"$exists":False}
             q=display_feed
             rows=await db.financial_feed.find(q).sort([("date",-1),("created_at",-1),("_id",-1)]).skip(offset).limit(page_size).to_list(page_size)
             if view=="closing" or direction=="closing":
@@ -791,7 +866,7 @@ async def accounting_view(tenant_id:str, view:str, period:str|None=None, account
             total=await db.financial_feed.count_documents(q)
             display_credits=round(sum(float(r.get("amount",0) or 0) for r in rows if float(r.get("amount",0) or 0)>0),2)
             display_debits=round(sum(abs(float(r.get("amount",0) or 0)) for r in rows if float(r.get("amount",0) or 0)<0),2)
-            return {"view":view,"filter":direction,"account":account,"account_label":("Bank Deposit" if account=="bank" else "Cash Deposit" if account=="cash" else "Group Active Account Balance"),"entries":entries,"has_more":offset+len(entries)<total,"total_entries":total,"total_credits":credits,"total_debits":debits,"grand_total":display_credits if direction=="inflows" else display_debits if direction=="outflows" else round(credits-debits,2),"opening_balance":round(opening,2),"closing_balance":round(opening+credits-debits,2),"opening_cash":opening_cash,"opening_bank":opening_bank}
+            return {"view":view,"filter":direction,"account":account,"account_label":("Bank Deposit" if account=="bank" else "Cash Deposit" if account=="cash" else "Group Active Account Balance"),"entries":entries,"has_more":offset+len(entries)<total,"total_entries":total,"total_credits":credits,"total_debits":debits,"grand_total":round(opening,2) if direction=="opening" else round(opening+credits-debits,2) if direction=="closing" else display_credits if direction=="inflows" else display_debits if direction=="outflows" else round(credits-debits,2),"opening_balance":round(opening,2),"closing_balance":round(opening+credits-debits,2),"opening_cash":opening_cash,"opening_bank":opening_bank}
 
         if view=="expenses":
             feed={"tenant_id":tenant_id,"source_type":"expense"}
@@ -1004,13 +1079,13 @@ async def admin_overview(tenant_id:str,user=Depends(admin_user)):
     return {"members":member_rows,"loans":loan_rows,"expenses":expense_rows,"categories":category_rows,"requests":request_rows,"audit":audit_rows}
 
 @router.get("/{tenant_id}/register-overview")
-async def register_overview(tenant_id:str,user=Depends(current_user)):
+async def register_overview(tenant_id:str,user=Depends(admin_user)):
     await tenant_guard(user,tenant_id)
     summary_row, tx_rows, member_rows = await asyncio.gather(tenant_summary(tenant_id, str(user.get("member_id")) if user.get("role") in ("member","group_admin") else None), transactions(tenant_id,user=user), members(tenant_id,user=user))
     return {"summary":summary_row,"transactions":tx_rows,"members":member_rows}
 
 @router.get("/{tenant_id}/ledger-overview")
-async def ledger_overview(tenant_id:str,user=Depends(current_user)):
+async def ledger_overview(tenant_id:str,user=Depends(admin_user)):
     """Member ledger read model.
 
     The UI no longer downloads thousands of transactions just to calculate one
@@ -1046,7 +1121,7 @@ async def ledger_overview(tenant_id:str,user=Depends(current_user)):
     return {"members":member_rows,"member_ledgers":member_ledgers,"loans":[serialize(x) for x in loan_rows]}
 
 @router.get("/{tenant_id}/loans-overview")
-async def loans_overview(tenant_id:str,user=Depends(current_user)):
+async def loans_overview(tenant_id:str,user=Depends(admin_user)):
     await tenant_guard(user,tenant_id)
     loan_rows, request_rows, member_rows = await asyncio.gather(group_loans(tenant_id,user=user), loan_requests(tenant_id,user=user), members(tenant_id,user=user))
     return {"loans":loan_rows,"requests":request_rows,"members":member_rows}
@@ -1055,7 +1130,7 @@ async def loans_overview(tenant_id:str,user=Depends(current_user)):
 async def personal_loan_overview(tenant_id:str,user=Depends(current_user)):
     await tenant_guard(user,tenant_id)
     if not user.get("member_id"): return {"loans":[],"requests":[]}
-    loan_rows, request_rows = await asyncio.gather(loans(tenant_id,str(user["member_id"]),user=user), loan_requests(tenant_id,user=user))
+    loan_rows, request_rows = await asyncio.gather(loans(tenant_id,str(user["member_id"]),user=user), _loan_request_rows(tenant_id,user,personal_only=True))
     return {"loans":loan_rows,"requests":request_rows}
 
 @router.post("/{tenant_id}/transactions/{transaction_id}/reverse")
@@ -1152,7 +1227,7 @@ async def loans(tenant_id:str,member_id:str|None=None,user=Depends(current_user)
             "has_more":page*page_size<total}
 
 @router.get("/{tenant_id}/group-loans")
-async def group_loans(tenant_id:str,user=Depends(current_user)):
+async def group_loans(tenant_id:str,user=Depends(admin_user)):
     await tenant_guard(user,tenant_id); db=get_db()
     rows=await db.loans.find({"tenant_id":tenant_id,"status":"active"}).sort("created_at",-1).to_list(5000)
     member_ids=[]
@@ -1231,15 +1306,21 @@ async def loan_request(tenant_id:str,body:LoanRequestCreate,user=Depends(current
     doc={"tenant_id":tenant_id,"member_id":member_id,"amount":body.amount,"months":body.months,"purpose":body.purpose,"loan_apply_date":datetime.combine(apply_date,datetime.min.time(),tzinfo=timezone.utc),"requested_start_date":datetime.combine(start_date,datetime.min.time(),tzinfo=timezone.utc),"status":"pending","idempotency_key":body.idempotency_key,"approval_records":[],"loan_approval_records":[],"created_at":now}
     r=await get_db().loan_requests.insert_one(doc); await audit(tenant_id,user,"LOAN_REQUESTED","loan_request",str(r.inserted_id),{"amount":body.amount,"loan_apply_date":str(apply_date),"requested_start_date":str(start_date)}); await _create_notification(tenant_id,role="admin",source_key=f"loan-request:{r.inserted_id}",title="New loan request",body=f"A member has requested ₹{float(body.amount):,.2f}.",created_at=now); return {"id":str(r.inserted_id),"credit_limit":elig["credit_limit"],"loan_apply_date":str(apply_date),"requested_start_date":str(start_date)}
 
-@router.get("/{tenant_id}/loan-requests")
-async def loan_requests(tenant_id:str,user=Depends(current_user)):
+async def _loan_request_rows(tenant_id:str,user,personal_only:bool=False):
     await tenant_guard(user,tenant_id); q={"tenant_id":tenant_id}
-    if user["role"] in ("member","group_admin") and user.get("member_id"):q["member_id"]=str(user.get("member_id"))
+    # Members see only their own requests. Group admins may also have a member
+    # record, but their admin approval queue must include all requests in-group.
+    if user["role"]=="member" or personal_only:
+        q["member_id"]=str(user.get("member_id") or "")
     rows=await get_db().loan_requests.find(q).sort("created_at",-1).to_list(2000)
     tenant=await group_settings(tenant_id); required=int(tenant.get("required_admin_approvals",1) or 1)
     for x in rows:
         x["approval_records"]=x.get("approval_records",x.get("loan_approval_records",[])); x["approval_count"]=len(x["approval_records"]); x["required_admin_approvals"]=required
     return [serialize(x) for x in rows]
+
+@router.get("/{tenant_id}/loan-requests")
+async def loan_requests(tenant_id:str,user=Depends(current_user)):
+    return await _loan_request_rows(tenant_id,user)
 
 @router.patch("/{tenant_id}/loan-requests/{request_id}")
 async def decide_loan_request(tenant_id:str,request_id:str,body:LoanRequestDecision,user=Depends(admin_user)):
@@ -1348,10 +1429,15 @@ async def expense_proof(tenant_id:str,expense_id:str,file:UploadFile=File(...),u
     if file.content_type not in {"image/jpeg","image/png","image/webp","application/pdf"}: raise HTTPException(415,"Only JPG, PNG, WebP or PDF receipts are allowed")
     data=await file.read()
     if len(data)>settings.max_upload_mb*1024*1024: raise HTTPException(413,"File too large")
-    if exp.get("proof_public_id"): delete_asset(exp["proof_public_id"],exp.get("proof_resource_type","image"))
     rt="raw" if file.content_type=="application/pdf" else "image"
-    r=upload_bytes(data,public_id=f"proof-{expense_id}",folder=f"bharat-bachat/tenants/{tenant_id}/expenses/{expense_id}",resource_type=rt)
+    # Upload and persist the replacement before deleting the previous proof so a
+    # Cloudinary failure cannot destroy the currently attached receipt.
+    r=upload_bytes(data,public_id=f"proof-{expense_id}-{uuid.uuid4().hex[:8]}",folder=f"bharat-bachat/tenants/{tenant_id}/expenses/{expense_id}",resource_type=rt)
     await db.expenses.update_one({"_id":exp["_id"]},{"$set":{"proof_url":r.get("secure_url"),"proof_public_id":r.get("public_id"),"proof_resource_type":rt,"proof_original_filename":file.filename,"proof_content_type":file.content_type}})
+    old_public_id=exp.get("proof_public_id")
+    if old_public_id and old_public_id!=r.get("public_id"):
+        try: delete_asset(old_public_id,exp.get("proof_resource_type","image"))
+        except Exception: pass
     await audit(tenant_id,user,"EXPENSE_PROOF_UPLOADED","expense",expense_id); return {"ok":True,"proof_url":r.get("secure_url")}
 
 @router.delete("/{tenant_id}/expenses/{expense_id}/proof")

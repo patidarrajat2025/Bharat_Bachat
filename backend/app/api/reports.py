@@ -12,6 +12,7 @@ async def receipt(tenant_id:str,transaction_id:str,user=Depends(current_user)):
     if not tx: raise HTTPException(404,"Transaction not found")
     if user["role"]=="member" and str(user.get("member_id"))!=tx.get("member_id"): raise HTTPException(403,"Access denied")
     m,t=await asyncio.gather(db.members.find_one({"_id":parse_oid(tx["member_id"]),"tenant_id":tenant_id}),db.tenants.find_one({"_id":parse_oid(tenant_id)}))
+    if not m or not t: raise HTTPException(404,"Member or group not found")
     logo_bytes=(await get_cached_logo_bytes(t.get("logo_url"))) or b''; pdf=receipt_pdf(t["name"],f'{m.get("first_name","")} {m.get("last_name","")}'.strip(),tx.get("amount",0),f'{tx.get("type","Transaction")} · Share {tx.get("share_no")}' if tx.get("share_no") else tx.get("type","Transaction"),transaction_id,str(tx.get("date",""))[:10],tx.get("account",""),t.get("logo_url"),tx.get("note",""),logo_bytes)
     return StreamingResponse(pdf,media_type="application/pdf",headers={"Content-Disposition":f'inline; filename="receipt-{transaction_id}.pdf"'})
 @router.get("/passbook/{tenant_id}/{member_id}")
@@ -19,6 +20,7 @@ async def passbook(tenant_id:str,member_id:str,from_date:date|None=None,to_date:
     await tenant_guard(user,tenant_id)
     if user["role"]=="member" and str(user.get("member_id"))!=member_id: raise HTTPException(403,"Access denied")
     db=get_db(); m,t=await asyncio.gather(db.members.find_one({"_id":parse_oid(member_id),"tenant_id":tenant_id}),db.tenants.find_one({"_id":parse_oid(tenant_id)}))
+    if not m or not t: raise HTTPException(404,"Member or group not found")
     q={"tenant_id":tenant_id,"member_id":member_id}
     if share_no:q["share_no"]=share_no
     all_rows=await db.transactions.find(q,{"_id":1,"date":1,"amount":1,"type":1,"account":1,"share_no":1,"share_id":1,"note":1}).sort("date",1).to_list(10000)

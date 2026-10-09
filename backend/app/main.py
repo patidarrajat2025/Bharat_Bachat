@@ -1,4 +1,5 @@
 from contextlib import asynccontextmanager
+import logging
 from datetime import datetime, timezone
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -7,6 +8,8 @@ from .services import backfill_legacy_expense_allocations
 from .core.config import settings
 from .core.security import hash_password
 from .api import auth, super_admin, group, reports
+
+logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -25,11 +28,31 @@ async def lifespan(app: FastAPI):
             "created_at": datetime.now(timezone.utc),
         })
     import asyncio
-    asyncio.create_task(backfill_legacy_expense_allocations())
+
+    async def _run_background_backfill(label, coroutine):
+        try:
+            await coroutine
+        except Exception:
+            # Retrieve and log background exceptions instead of emitting
+            # "Task exception was never retrieved" and silently losing context.
+            logger.exception("Startup background task failed: %s", label)
+
     async def _backfill_tenants():
         async for t in db.tenants.find({}, {"_id":1}):
-            await backfill_financial_feed(str(t["_id"]))
-    asyncio.create_task(_backfill_tenants())
+            tenant_id = str(t["_id"])
+            try:
+                await backfill_financial_feed(tenant_id)
+            except Exception:
+                # A single tenant's malformed/failed feed must not stop the
+                # remaining tenants from being backfilled.
+                logger.exception("Financial feed backfill failed for tenant_id=%s", tenant_id)
+
+    asyncio.create_task(_run_background_backfill(
+        "legacy expense allocations", backfill_legacy_expense_allocations()
+    ))
+    asyncio.create_task(_run_background_backfill(
+        "tenant financial feeds", _backfill_tenants()
+    ))
     yield
     await close_db()
 

@@ -88,7 +88,7 @@ export function Layout({children}:{children:ReactNode}){
   const profileRef=useRef<HTMLDivElement|null>(null);
   const [settings,setSettings]=useState(false);
   const [unread,setUnread]=useState(0);
-  const [notifications,setNotifications]=useState<any[]>([]); const [notifOpen,setNotifOpen]=useState(false); const [toast,setToast]=useState('');
+  const [notifications,setNotifications]=useState<any[]>([]); const [notifOpen,setNotifOpen]=useState(false); const [toast,setToast]=useState<{message:string;type:'success'|'error'|'info'}|null>(null);
   const refreshNotifications=async(openTray=false)=>{if(!user?.tenant_id)return;try{const rows=await api.notifications(user.tenant_id);const unreadRows=rows.filter((n:any)=>!n.read);setUnread(unreadRows.length);setNotifications(rows);if(openTray&&unreadRows.length){await Promise.all(unreadRows.map((n:any)=>api.markNotificationRead(user.tenant_id!,n._id).catch(()=>null)));setNotifications(rows.map((n:any)=>({...n,read:true})));setUnread(0)}}catch{}};
   const closeNotifications=async()=>{setNotifOpen(false);if(!user?.tenant_id||!notifications.length)return;const ids=notifications.map((n:any)=>n._id).filter(Boolean);try{await api.clearNotifications(user.tenant_id,ids);setNotifications([]);setUnread(0)}catch{}};
   const allowed=user?.role==='member'
@@ -101,7 +101,7 @@ export function Layout({children}:{children:ReactNode}){
   const hasMore=visible.length>4;
   const active=visible.find(x=>loc.pathname===x[0] || (x[0] !== '/dashboard' && loc.pathname.startsWith(`${x[0]}/`)));
   useEffect(()=>{setMore(false);setProfile(false)},[loc.pathname]);
-  useEffect(()=>{const h=(e:Event)=>{const d=(e as CustomEvent).detail;setToast(String(d?.message||''));window.setTimeout(()=>setToast(''),2200)};window.addEventListener('bb-toast',h);return()=>window.removeEventListener('bb-toast',h)},[]);
+  useEffect(()=>{let timer:number|undefined;const h=(e:Event)=>{const d=(e as CustomEvent).detail;window.clearTimeout(timer);setToast({message:String(d?.message||''),type:d?.type==='error'?'error':d?.type==='info'?'info':'success'});timer=window.setTimeout(()=>setToast(null),d?.type==='error'?5000:3200)};window.addEventListener('bb-toast',h);return()=>{window.clearTimeout(timer);window.removeEventListener('bb-toast',h)}},[]);
   useEffect(()=>{
     if(!profile)return;
     const close=(event:PointerEvent)=>{const target=event.target as Node|null;if(profileRef.current&&!profileRef.current.contains(target))setProfile(false)};
@@ -165,7 +165,7 @@ export function Layout({children}:{children:ReactNode}){
 
     {notifOpen&&<div className="notification-overlay" onMouseDown={e=>{if(e.target===e.currentTarget)closeNotifications()}}><div className="notification-panel"><div className="notification-head"><div><b>{tr('Notifications')}</b><span>{notifications.length} {tr('entries')}</span></div><button className="icon-btn" onClick={closeNotifications}><X size={18}/></button></div><div className="notification-list">{notifications.map((n:any)=><div className={`notification-item ${n.read?'read':''}`} key={n._id}><div><b>{trDynamic(n.title)}</b><p>{trDynamic(n.body)}</p><small>{n.created_at?new Date(n.created_at).toLocaleString(appLocale()):''}</small></div><button className="notification-delete" onClick={async()=>{try{if(user?.tenant_id)await api.deleteNotification(user.tenant_id,n._id);setNotifications(x=>x.filter(v=>v._id!==n._id));setUnread(x=>Math.max(0,x-(n.read?0:1)))}catch{}}}><X size={15}/></button></div>)}{!notifications.length&&<div className="empty-state">{tr('No data yet')}</div>}</div></div></div>}
     {settings&&<Modal title={tr('Settings')} onClose={()=>setSettings(false)}><ThemeSettings onDone={()=>setSettings(false)}/></Modal>}
-    {toast&&<div className="bb-toast" role="status">{toast}</div>}
+    {toast&&<div className={`bb-toast bb-toast-${toast.type}`} role={toast.type==='error'?'alert':'status'} aria-live={toast.type==='error'?'assertive':'polite'}><span className="bb-toast-icon" aria-hidden="true">{toast.type==='success'?'✓':toast.type==='error'?'!':'i'}</span><span>{toast.message}</span><button type="button" className="bb-toast-close" aria-label={tr('Close')} onClick={()=>setToast(null)}>×</button></div>}
     {more&&<div className="mobile-more-overlay" onClick={()=>setMore(false)}>
       <div className="mobile-more-sheet safe-bottom" onClick={e=>e.stopPropagation()}>
         <div className="sheet-handle"/>

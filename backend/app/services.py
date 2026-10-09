@@ -39,7 +39,8 @@ async def tenant_summary(tenant_id: str, member_id: str | None = None):
             {"$match": {"tenant_id": tenant_id}},
             {"$project": {
                 "type": 1,
-                "account": 1,
+                # Legacy blank/null accounts are cash throughout the ledger.
+                "account": {"$cond": [{"$in": [{"$ifNull": ["$account", ""]}, [""]]}, "cash", "$account"]},
                 "payment_category": 1,
                 "penalty_category": 1,
                 "amount": {"$convert": {"input": {"$ifNull": ["$amount", 0]}, "to": "double", "onError": 0, "onNull": 0}},
@@ -87,7 +88,10 @@ async def tenant_summary(tenant_id: str, member_id: str | None = None):
         ]).to_list(1),
         db.expenses.aggregate([
             {"$match": {"tenant_id": tenant_id}},
-            {"$project": {"amount": {"$convert": {"input": {"$ifNull": ["$amount", 0]}, "to": "double", "onError": 0, "onNull": 0}}, "account": {"$ifNull": ["$account", "cash"]}}},
+            {"$project": {
+                "amount": {"$convert": {"input": {"$ifNull": ["$amount", 0]}, "to": "double", "onError": 0, "onNull": 0}},
+                "account": {"$cond": [{"$in": [{"$ifNull": ["$account", ""]}, [""]]}, "cash", "$account"]},
+            }},
             {"$group": {
                 "_id": None,
                 "total": {"$sum": "$amount"},
@@ -201,81 +205,107 @@ async def tenant_summary(tenant_id: str, member_id: str | None = None):
 
 
 async def analytics(tenant_id: str, months: int = 12, share_no: int | None = None, member_id: str | None = None):
-    """One transaction aggregation + one expense aggregation for the full period."""
+    """Return group analytics to admins and scoped personal analytics to members.
+
+    Member analytics must not expose another member's transactions or group-wide
+    totals. Group profit is still used server-side to calculate the caller's own
+    share, but only that allocated share is returned in personal mode.
+    """
     db = get_db()
     periods = _month_starts(months)
     start, end = periods[0][0], periods[-1][1]
-    member_share_count_task = db.shares.count_documents({"tenant_id": tenant_id, "member_id": member_id, "status": "active"}) if member_id else asyncio.sleep(0, result=0)
+    share_query = {"tenant_id": tenant_id, "status": "active"}
+    if member_id:
+        share_query["member_id"] = member_id
+    if share_no is not None:
+        share_query["share_no"] = share_no
+    member_share_count_task = db.shares.count_documents(share_query) if member_id else asyncio.sleep(0, result=0)
     active_shares_task = db.shares.count_documents({"tenant_id": tenant_id, "status": "active"})
 
-    tx_match = {"tenant_id": tenant_id, "date": {"$gte": start, "$lt": end}}
+    base_match = {"tenant_id": tenant_id, "date": {"$gte": start, "$lt": end}}
+    personal_match = {**base_match, "member_id": member_id} if member_id else None
     if share_no is not None:
-        tx_match["share_no"] = share_no
+        # In personal mode, share_no is scoped to the caller's own shares; the
+        # group-wide profit denominator must still use the whole group's income.
+        if member_id and personal_match is not None:
+            personal_match["share_no"] = share_no
+        else:
+            base_match["share_no"] = share_no
 
-    tx_task = db.transactions.aggregate([
-        {"$match": tx_match},
-        {"$project": {
-            "date": 1,
-            "type": 1,
-            "payment_category": 1,
-            "penalty_category": 1,
-            "amount": {"$convert": {"input": {"$ifNull": ["$amount", 0]}, "to": "double", "onError": 0, "onNull": 0}},
-            "interest_value": {"$convert": {"input": {"$ifNull": ["$interest", 0]}, "to": "double", "onError": 0, "onNull": 0}},
-        }},
-        {"$group": {
-            "_id": {"month": {"$dateToString": {"format": "%Y-%m", "date": "$date", "timezone": "UTC"}}},
-            "contributions": {"$sum": {"$cond": [{"$eq": ["$type", "contribution"]}, "$amount", 0]}},
-            "interest": {"$sum": {"$cond": [{"$eq": ["$type", "interest"]}, "$amount", 0]}},
-            "bc_penalties": {"$sum": {"$add": ["$bc_penalty_value", {"$cond": [{"$and": [{"$eq": ["$type", "penalty"]}, {"$ne": ["$payment_category", "loan"]}, {"$ne": ["$payment_category", "other"]}, {"$eq": ["$bc_penalty_value", 0]}]}, "$amount", 0]}]}},
-            "loan_penalties": {"$sum": {"$add": ["$loan_penalty_value", {"$cond": [{"$and": [{"$eq": ["$type", "penalty"]}, {"$or": [{"$eq": ["$payment_category", "loan"]}, {"$eq": ["$penalty_category", "loan"]}]}, {"$eq": ["$loan_penalty_value", 0]}]}, "$amount", 0]}]}},
-            "loan_interest": {"$sum": {"$cond": [{"$gt": ["$loan_interest_value", 0]}, "$loan_interest_value", {"$cond": [{"$eq": ["$type", "loan_repayment"]}, "$interest_value", 0]}]}},
-            "repayments": {"$sum": {"$cond": [{"$eq": ["$type", "loan_repayment"]}, "$amount", 0]}},
-            "other_income": {"$sum": {"$cond": [{"$and": [
-                {"$not": [{"$in": ["$type", ["contribution", "loan_repayment", "loan_disbursement", "expense_allocation", "expense", "interest", "penalty"]]}]},
-                {"$gt": ["$amount", 0]},
-            ]}, "$amount", 0]}},
-        }},
-    ]).to_list(None)
+    def transaction_pipeline(match):
+        return [
+            {"$match": match},
+            {"$project": {
+                "date": 1, "type": 1, "payment_category": 1, "penalty_category": 1,
+                "amount": {"$convert": {"input": {"$ifNull": ["$amount", 0]}, "to": "double", "onError": 0, "onNull": 0}},
+                "interest_value": {"$convert": {"input": {"$ifNull": ["$interest", 0]}, "to": "double", "onError": 0, "onNull": 0}},
+                "bc_penalty_value": {"$convert": {"input": {"$ifNull": ["$bc_penalty_value", 0]}, "to": "double", "onError": 0, "onNull": 0}},
+                "loan_penalty_value": {"$convert": {"input": {"$ifNull": ["$loan_penalty_value", 0]}, "to": "double", "onError": 0, "onNull": 0}},
+                "loan_interest_value": {"$convert": {"input": {"$ifNull": ["$loan_interest_value", 0]}, "to": "double", "onError": 0, "onNull": 0}},
+            }},
+            {"$group": {
+                "_id": {"month": {"$dateToString": {"format": "%Y-%m", "date": "$date", "timezone": "UTC"}}},
+                "contributions": {"$sum": {"$cond": [{"$eq": ["$type", "contribution"]}, "$amount", 0]}},
+                "interest": {"$sum": {"$cond": [{"$eq": ["$type", "interest"]}, "$amount", 0]}},
+                "bc_penalties": {"$sum": {"$add": ["$bc_penalty_value", {"$cond": [{"$and": [{"$eq": ["$type", "penalty"]}, {"$ne": ["$payment_category", "loan"]}, {"$ne": ["$payment_category", "other"]}, {"$eq": ["$bc_penalty_value", 0]}]}, "$amount", 0]}]}},
+                "loan_penalties": {"$sum": {"$add": ["$loan_penalty_value", {"$cond": [{"$and": [{"$eq": ["$type", "penalty"]}, {"$or": [{"$eq": ["$payment_category", "loan"]}, {"$eq": ["$penalty_category", "loan"]}]}, {"$eq": ["$loan_penalty_value", 0]}]}, "$amount", 0]}]}},
+                "loan_interest": {"$sum": {"$cond": [{"$gt": ["$loan_interest_value", 0]}, "$loan_interest_value", {"$cond": [{"$eq": ["$type", "loan_repayment"]}, "$interest_value", 0]}]}},
+                "repayments": {"$sum": {"$cond": [{"$eq": ["$type", "loan_repayment"]}, "$amount", 0]}},
+                "other_income": {"$sum": {"$cond": [{"$and": [
+                    {"$not": [{"$in": ["$type", ["contribution", "loan_repayment", "loan_disbursement", "expense_allocation", "expense", "interest", "penalty"]]}]},
+                    {"$gt": ["$amount", 0]},
+                ]}, "$amount", 0]}},
+            }},
+        ]
+
+    group_tx_task = db.transactions.aggregate(transaction_pipeline(base_match)).to_list(None)
+    personal_tx_task = db.transactions.aggregate(transaction_pipeline(personal_match)).to_list(None) if personal_match else asyncio.sleep(0, result=[])
     exp_task = db.expenses.aggregate([
         {"$match": {"tenant_id": tenant_id, "date": {"$gte": start, "$lt": end}}},
         {"$project": {"date": 1, "amount": {"$convert": {"input": {"$ifNull": ["$amount", 0]}, "to": "double", "onError": 0, "onNull": 0}}}},
         {"$group": {"_id": {"month": {"$dateToString": {"format": "%Y-%m", "date": "$date", "timezone": "UTC"}}}, "expenses": {"$sum": "$amount"}}},
     ]).to_list(None)
 
-    tx_rows, exp_rows, member_share_count, active_share_count = await asyncio.gather(tx_task, exp_task, member_share_count_task, active_shares_task)
-    tx_map = {str(x["_id"]["month"]): x for x in tx_rows}
+    group_rows, personal_rows, exp_rows, member_share_count, active_share_count = await asyncio.gather(
+        group_tx_task, personal_tx_task, exp_task, member_share_count_task, active_shares_task
+    )
+    group_map = {str(x["_id"]["month"]): x for x in group_rows}
+    personal_map = {str(x["_id"]["month"]): x for x in personal_rows}
     exp_map = {str(x["_id"]["month"]): float(x.get("expenses", 0) or 0) for x in exp_rows}
     active_shares = max(1, active_share_count)
+    member_share_count = int(member_share_count or 0)
 
     rows = []
     for start_month, _ in periods:
         key = start_month.strftime("%Y-%m")
-        x = tx_map.get(key, {})
-        expense_total = exp_map.get(key, 0.0)
+        group_x = group_map.get(key, {})
+        x = personal_map.get(key, {}) if member_id else group_x
+        group_expense_total = exp_map.get(key, 0.0)
         interest_income = float(x.get("interest", 0) or 0)
         loan_interest_income = float(x.get("loan_interest", 0) or 0)
-        bc_penalties = float(x.get("bc_penalties", 0) or 0)
-        loan_penalties = float(x.get("loan_penalties", 0) or 0)
+        bc_penalties = float(group_x.get("bc_penalties", 0) or 0)
+        loan_penalties = float(group_x.get("loan_penalties", 0) or 0)
         other_income = float(x.get("other_income", 0) or 0)
-        # Group Profit follows the dashboard rule: loan interest + BC penalties + loan penalties.
-        profit_income = loan_interest_income + bc_penalties + loan_penalties
-        profit = round(profit_income, 2)
-        per_share = round(profit / active_shares, 2)
-        member_expenses = round((expense_total / active_shares) * member_share_count, 2) if member_id else None
-        member_profit = round((profit_income / active_shares) * member_share_count, 2) if member_id else None
+        # Profit allocation uses group income internally, but personal mode only
+        # returns the caller's share rather than the full group profit.
+        group_profit_income = loan_interest_income if member_id else float(group_x.get("loan_interest", 0) or 0)
+        if member_id:
+            group_profit_income = float(group_x.get("loan_interest", 0) or 0) + bc_penalties + loan_penalties
+        else:
+            group_profit_income = float(group_x.get("loan_interest", 0) or 0) + bc_penalties + loan_penalties
+        member_profit = round((group_profit_income / active_shares) * member_share_count, 2) if member_id else None
+        member_expenses = round((group_expense_total / active_shares) * member_share_count, 2) if member_id else None
+        visible_profit = member_profit if member_id else round(group_profit_income, 2)
+        visible_expenses = member_expenses if member_id else round(group_expense_total, 2)
+        visible_per_share = round((member_profit / max(1, member_share_count)), 2) if member_id else round(group_profit_income / active_shares, 2)
         rows.append({
-            "month": start_month.strftime("%b %y"),
-            "year": start_month.year,
-            "month_key": key,
+            "month": start_month.strftime("%b %y"), "year": start_month.year, "month_key": key,
             "contributions": round(float(x.get("contributions", 0) or 0), 2),
             "interest": round(interest_income + loan_interest_income + other_income, 2),
             "repayments": round(float(x.get("repayments", 0) or 0), 2),
-            "expenses": round(expense_total, 2),
-            "profit": profit,
-            "profit_per_share": per_share,
-            "member_profit": member_profit,
-            "member_expenses": member_expenses,
-            "member_share_count": member_share_count,
+            "expenses": visible_expenses, "profit": visible_profit, "profit_per_share": visible_per_share,
+            "member_profit": member_profit, "member_expenses": member_expenses,
+            "member_share_count": member_share_count if member_id else None,
         })
     return rows
 
