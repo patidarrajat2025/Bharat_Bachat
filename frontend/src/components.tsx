@@ -6,7 +6,7 @@ import { useTranslation } from 'react-i18next';
 import { BarChart3, BookOpen, ChevronDown, CreditCard, FileText, Home, LogOut, MoreHorizontal, Receipt, ShieldCheck, Smartphone, UserCircle, Users, WalletCards, X, Bell, Settings, Sun, Moon, Palette, Check, ArrowDownToLine, ArrowUpFromLine } from 'lucide-react';
 import { useStore } from './store';
 import { tr, trError, trDynamic, appLocale } from './i18n';
-import { api, prefetchGroupRoute } from './api';
+import { api } from './api';
 
 type InstallPromptEvent = Event & { prompt:()=>Promise<void>; userChoice:Promise<{outcome:'accepted'|'dismissed'}> };
 
@@ -92,7 +92,7 @@ export function Layout({children}:{children:ReactNode}){
   const refreshNotifications=async(openTray=false)=>{if(!user?.tenant_id)return;try{const rows=await api.notifications(user.tenant_id);const unreadRows=rows.filter((n:any)=>!n.read);setUnread(unreadRows.length);setNotifications(rows);if(openTray&&unreadRows.length){await Promise.all(unreadRows.map((n:any)=>api.markNotificationRead(user.tenant_id!,n._id).catch(()=>null)));setNotifications(rows.map((n:any)=>({...n,read:true})));setUnread(0)}}catch{}};
   const closeNotifications=async()=>{setNotifOpen(false);if(!user?.tenant_id||!notifications.length)return;const ids=notifications.map((n:any)=>n._id).filter(Boolean);try{await api.clearNotifications(user.tenant_id,ids);setNotifications([]);setUnread(0)}catch{}};
   const allowed=user?.role==='member'
-    ? ['/dashboard','/analytics','/passbook','/loans','/personal-loan']
+    ? ['/dashboard','/analytics','/passbook','/personal-loan']
     : user?.role==='super_admin'
       ? ['/admin']
       : nav.map(x=>x[0]);
@@ -108,14 +108,8 @@ export function Layout({children}:{children:ReactNode}){
     document.addEventListener('pointerdown',close,true);
     return()=>document.removeEventListener('pointerdown',close,true);
   },[profile]);
-  useEffect(()=>{void refreshNotifications(false)},[user?.tenant_id]);
-  const prefetch=(route:string)=>prefetchGroupRoute(user?.tenant_id||tenant?._id||'',route,user?.role,user?.member_id);
-  useEffect(()=>{
-    const tid=user?.tenant_id||tenant?._id||''; if(!tid)return;
-    const run=()=>{prefetchGroupRoute(tid,'/analytics',user?.role,user?.member_id);prefetchGroupRoute(tid,'/loans',user?.role,user?.member_id);prefetchGroupRoute(tid,'/passbook',user?.role,user?.member_id)};
-    const w=window as any; const id=w.requestIdleCallback? w.requestIdleCallback(run,{timeout:1800}):window.setTimeout(run,900);
-    return()=>{if(w.cancelIdleCallback)w.cancelIdleCallback(id);else window.clearTimeout(id)};
-  },[user?.tenant_id,user?.role,user?.member_id,tenant?._id]);
+  // Do not prefetch unrelated screens or fetch notifications on every route mount.
+  // Each screen owns its required data calls; notifications load only when opened.
 
   return <div className="app-shell" data-route={loc.pathname}><InstallBanner/>
     <header className="app-header safe-top figma-header">
@@ -148,7 +142,7 @@ export function Layout({children}:{children:ReactNode}){
       <aside className="desktop-sidebar figma-sidebar">
         <div className="sidebar-brand"><Logo compact src={tenant?.logo_url}/></div>
         <nav className="sidebar-nav">
-          {visible.map(([to,label,Icon])=><Link key={to} to={to} onMouseEnter={()=>prefetch(to)} onTouchStart={()=>prefetch(to)} className={`sidebar-link ${loc.pathname===to || (to!=='/dashboard' && loc.pathname.startsWith(`${to}/`))?'is-active':''}`}><Icon size={19}/><span>{t(label)}</span></Link>)}
+          {visible.map(([to,label,Icon])=><Link key={to} to={to} className={`sidebar-link ${loc.pathname===to || (to!=='/dashboard' && loc.pathname.startsWith(`${to}/`))?'is-active':''}`}><Icon size={19}/><span>{t(label)}</span></Link>)}
         </nav>
         <div className="sidebar-footer"><span>{user?.role==='super_admin'?tr('Super Admin'):user?.role==='group_admin'?tr('Group Admin'):tr('Member')}</span></div>
       </aside>
@@ -159,7 +153,7 @@ export function Layout({children}:{children:ReactNode}){
     </div>
 
     <nav className="mobile-nav safe-bottom" aria-label={tr("Primary navigation")}>
-      {primary.map(([to,label,Icon])=><Link key={to} to={to} onTouchStart={()=>prefetch(to)} className={`mobile-nav-item ${loc.pathname===to || (to!=='/dashboard' && loc.pathname.startsWith(`${to}/`))?'is-active':''}`}>{loc.pathname===to&&<motion.span layoutId="bb-nav-active" className="mobile-nav-active" transition={{type:'spring',stiffness:420,damping:30}}/>}<Icon size={19}/><span>{t(label)}</span></Link>)}
+      {primary.map(([to,label,Icon])=><Link key={to} to={to} className={`mobile-nav-item ${loc.pathname===to || (to!=='/dashboard' && loc.pathname.startsWith(`${to}/`))?'is-active':''}`}>{loc.pathname===to&&<motion.span layoutId="bb-nav-active" className="mobile-nav-active" transition={{type:'spring',stiffness:420,damping:30}}/>}<Icon size={19}/><span>{t(label)}</span></Link>)}
       {hasMore&&<button type="button" className={`mobile-nav-item ${active && !primary.some(x=>x[0]===active[0])?'is-active':''}`} onClick={()=>setMore(v=>!v)}><MoreHorizontal size={20}/><span>{t(mobileLabel('more'))}</span></button>}
     </nav>
 
@@ -171,7 +165,7 @@ export function Layout({children}:{children:ReactNode}){
         <div className="sheet-handle"/>
         <div className="sheet-head"><div><b>{t('more')}</b><span>{tenant?.name||''}</span></div><button type="button" className="icon-btn" onClick={()=>setMore(false)}><X size={19}/></button></div>
         <div className="more-grid">
-          {visible.map(([to,label,Icon])=><Link key={to} to={to} onTouchStart={()=>prefetch(to)} onMouseEnter={()=>prefetch(to)} className={`more-item ${loc.pathname===to || (to!=='/dashboard' && loc.pathname.startsWith(`${to}/`))?'is-active':''}`}><Icon size={21}/><span>{t(label)}</span></Link>)}
+          {visible.map(([to,label,Icon])=><Link key={to} to={to} className={`more-item ${loc.pathname===to || (to!=='/dashboard' && loc.pathname.startsWith(`${to}/`))?'is-active':''}`}><Icon size={21}/><span>{t(label)}</span></Link>)}
         </div>
       </div>
     </div>}

@@ -119,25 +119,6 @@ async function request<T>(path:string,options:RequestInit={}):Promise<T>{
 }
 
 
-export function prefetchGroupRoute(tid:string, route:string, role?:string, memberId?:string){
-  if(!tid) return;
-  const safe = (promise:Promise<unknown>) => { void promise.catch(()=>null); };
-  if(route==='/members') return safe(api.members(tid));
-  if(route==='/register') return safe(api.registerOverview(tid));
-  if(route==='/ledger') return safe(api.ledgerOverview(tid));
-  if(route==='/analytics'){
-    if(role==='member' && memberId) return safe(Promise.all([api.passbook(tid,memberId),api.analytics(tid,12,undefined,memberId)]).then(()=>undefined));
-    return safe(Promise.all([api.members(tid),api.analytics(tid,12)]).then(()=>undefined));
-  }
-  if(route==='/passbook'){
-    if(role==='member' && memberId) return safe(api.passbook(tid,memberId));
-    return safe(api.members(tid).then(ms=>{const first=ms[0]?._id; return first?api.passbook(tid,first):undefined;}));
-  }
-  if(route==='/loans') return role==='member'?undefined:safe(api.loansOverview(tid));
-  if(route==='/personal-loan') return safe(api.personalLoanOverview(tid));
-  if(route==='/admin' && role!=='super_admin') return safe(api.adminOverview(tid));
-}
-
 export const api={
  login:(phone:string,password:string)=>request<{access_token:string;user:User}>('/auth/login',{method:'POST',body:JSON.stringify({phone,password})}),
  me:()=>request<User>('/auth/me'),

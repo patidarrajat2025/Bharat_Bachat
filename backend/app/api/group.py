@@ -28,6 +28,13 @@ async def ensure_financial_feed_ready(tenant_id: str):
     source bucket independently and its signed total before trusting the feed.
     """
     db=get_db()
+    # Normalize already-materialized legacy rows whose account was missing,
+    # null or blank. Otherwise an account=cash query misses records even when
+    # account-wise totals appear to match during reconciliation.
+    await db.financial_feed.update_many(
+        {"tenant_id":tenant_id,"$or":[{"account":None},{"account":""}]},
+        {"$set":{"account":"cash"}},
+    )
 
     async def needs_repair():
         amount_expr={"$convert":{"input":{"$ifNull":["$amount",0]},"to":"double","onError":0,"onNull":0}}
@@ -830,7 +837,7 @@ async def accounting_view(tenant_id:str, view:str, period:str|None=None, account
     if view in {"register","profit","expenses","outflows","interest","closing"}:
         feed={"tenant_id":tenant_id}
         if view in {"register","closing"}:
-            base_feed={"tenant_id":tenant_id,"$or":[{"source_type":"expense"},{"source_type":"transaction","type":{"$nin":["expense_allocation","expense"]},"expense_id":{"$exists":False}}]}
+            base_feed={"tenant_id":tenant_id,"$or":[{"source_type":"expense"},{"source_type":"transaction","type":{"$nin":["expense_allocation","expense"]},"expense_id":None}]}
             if account: base_feed["account"]=account
             direction=(filter or period or "all").lower() if view=="register" else "closing"
             # Summary cards must always use the complete bank book. The selected
@@ -841,15 +848,14 @@ async def accounting_view(tenant_id:str, view:str, period:str|None=None, account
             opening_cash=float(tenant.get("opening_cash",0) or 0); opening_bank=float(tenant.get("opening_bank",0) or 0)
             opening=(opening_cash+opening_bank) if not account else (opening_cash if account=="cash" else opening_bank)
             display_feed=dict(base_feed)
+            opening_mode = view=="register" and direction=="opening"
             if view=="register":
                 if direction=="inflows": display_feed["amount"]={"$gt":0}
                 elif direction=="outflows": display_feed["amount"]={"$lt":0}
-                elif direction=="opening":
-                    # Opening balance is a starting value, not a transaction
-                    # list. The card should not repeat every ledger entry.
-                    display_feed["_id"]={"$exists":False}
             q=display_feed
-            rows=await db.financial_feed.find(q).sort([("date",-1),("created_at",-1),("_id",-1)]).skip(offset).limit(page_size).to_list(page_size)
+            # Opening balance is a distinct, explicit starting entry; it must not
+            # be represented by an impossible query (_id does not exist).
+            rows=[] if opening_mode else await db.financial_feed.find(q).sort([("date",-1),("created_at",-1),("_id",-1)]).skip(offset).limit(page_size).to_list(page_size)
             if view=="closing" or direction=="closing":
                 rows=await _attach_running_balances(rows,q,opening+credits-debits)
             member_ids=[]
@@ -863,10 +869,12 @@ async def accounting_view(tenant_id:str, view:str, period:str|None=None, account
             for r in rows:
                 amount=float(r.get("amount",0) or 0); name=names.get(str(r.get("member_id")),"")
                 entries.append({"id":str(r.get("source_id") or r.get("_id")),"date":str(r.get("date") or r.get("created_at")),"member_id":r.get("member_id"),"member_name":name,"type":r.get("type","transaction"),"amount":round(abs(amount),2),"account":r.get("account","cash"),"note":r.get("note","") or r.get("category","") or "","direction":"Credit" if amount>=0 else "Debit","entry_type":"Credit" if amount>=0 else "Debit","payment_category":r.get("payment_category"),"reason":r.get("note","") or r.get("category","") or r.get("type","Transaction"),"running_balance":r.get("running_balance")})
-            total=await db.financial_feed.count_documents(q)
+            total=1 if opening_mode else await db.financial_feed.count_documents(q)
+            if opening_mode:
+                entries=[{"id":f"opening-{tenant_id}-{account or 'group'}","date":str(tenant.get("created_at") or ""),"member_id":None,"member_name":"","type":"Opening Balance","amount":abs(round(opening,2)),"account":account or "cash","note":"Opening balance","direction":"Credit" if opening>=0 else "Debit","entry_type":"Credit" if opening>=0 else "Debit","payment_category":None,"reason":"Starting group balance","running_balance":round(opening,2)}]
             display_credits=round(sum(float(r.get("amount",0) or 0) for r in rows if float(r.get("amount",0) or 0)>0),2)
             display_debits=round(sum(abs(float(r.get("amount",0) or 0)) for r in rows if float(r.get("amount",0) or 0)<0),2)
-            return {"view":view,"filter":direction,"account":account,"account_label":("Bank Deposit" if account=="bank" else "Cash Deposit" if account=="cash" else "Group Active Account Balance"),"entries":entries,"has_more":offset+len(entries)<total,"total_entries":total,"total_credits":credits,"total_debits":debits,"grand_total":round(opening,2) if direction=="opening" else round(opening+credits-debits,2) if direction=="closing" else display_credits if direction=="inflows" else display_debits if direction=="outflows" else round(credits-debits,2),"opening_balance":round(opening,2),"closing_balance":round(opening+credits-debits,2),"opening_cash":opening_cash,"opening_bank":opening_bank}
+            return {"view":view,"filter":direction,"account":account,"account_label":("Bank Deposit" if account=="bank" else "Cash Deposit" if account=="cash" else "Group Active Account Balance"),"entries":entries,"has_more":False if opening_mode else offset+len(entries)<total,"total_entries":total,"total_credits":credits,"total_debits":debits,"grand_total":round(opening,2) if direction=="opening" else round(opening+credits-debits,2) if direction=="closing" else display_credits if direction=="inflows" else display_debits if direction=="outflows" else round(credits-debits,2),"opening_balance":round(opening,2),"closing_balance":round(opening+credits-debits,2),"opening_cash":opening_cash,"opening_bank":opening_bank}
 
         if view=="expenses":
             feed={"tenant_id":tenant_id,"source_type":"expense"}
