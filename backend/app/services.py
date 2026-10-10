@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 import asyncio
 from bson import ObjectId
 from .db import get_db
+from .accounting_engine import profit_components, to_minor, from_minor, allocate_minor
 
 
 def oid(value: str):
@@ -9,6 +10,13 @@ def oid(value: str):
         return ObjectId(value)
     except Exception:
         return None
+
+
+def _mongo_amount_rupees_expr(minor_field: str = "amount_minor", amount_field: str = "amount") -> dict:
+    raw = {"$convert": {"input": {"$ifNull": [f"${amount_field}", 0]}, "to": "double", "onError": 0, "onNull": 0}}
+    legacy_minor = {"$round": [{"$multiply": [raw, 100]}, 0]}
+    minor = {"$convert": {"input": {"$ifNull": [f"${minor_field}", legacy_minor]}, "to": "double", "onError": 0, "onNull": 0}}
+    return {"$divide": [minor, 100]}
 
 
 def _month_starts(months: int, now: datetime | None = None):
@@ -25,29 +33,100 @@ def _month_starts(months: int, now: datetime | None = None):
     return out
 
 
-async def tenant_summary(tenant_id: str, member_id: str | None = None):
-    """Return the accounting summary without pulling the tenant ledger into Python.
+async def profit_report(tenant_id: str, start: datetime | None = None, end: datetime | None = None,
+                        entry_offset: int = 0, entry_limit: int = 0):
+    """Canonical profit read model shared by dashboard, analytics and register.
 
-    The previous implementation downloaded up to 20k transactions + 10k expenses +
-    10k loans for every summary request. MongoDB can calculate these totals much
-    faster in-place, and the API only needs the small aggregate result.
+    It classifies the immutable source ledger with the same integer-paise engine
+    in every read path. MongoDB cursors stream rows to avoid loading the entire
+    ledger into memory; only the requested income-entry page is retained.
     """
     db = get_db()
-    tenant, tx_stats_rows, exp_stats_rows, member_stats_rows, counts = await asyncio.gather(
+    tx_query = {"tenant_id": tenant_id}
+    exp_query = {"tenant_id": tenant_id}
+    if start is not None or end is not None:
+        date_range = {}
+        if start is not None: date_range["$gte"] = start
+        if end is not None: date_range["$lt"] = end
+        # Legacy rows may have only created_at. Keep them in period reports
+        # without including rows whose actual date falls outside the period.
+        tx_query = {"tenant_id": tenant_id, "$or": [
+            {"date": dict(date_range)},
+            {"date": {"$exists": False}, "created_at": dict(date_range)},
+            {"date": None, "created_at": dict(date_range)},
+        ]}
+        exp_query = {"tenant_id": tenant_id, "$or": [
+            {"date": dict(date_range)},
+            {"date": {"$exists": False}, "created_at": dict(date_range)},
+            {"date": None, "created_at": dict(date_range)},
+        ]}
+    projection = {"_id":1,"tenant_id":1,"member_id":1,"type":1,"original_type":1,"reversal_of":1,
+                  "amount":1,"amount_minor":1,"account":1,"date":1,"created_at":1,"note":1,
+                  "loan_interest_collected":1,"loan_interest_minor":1,"interest":1,"interest_minor":1,
+                  "other_interest":1,"other_interest_value":1,"other_interest_minor":1,
+                  "loan_penalty_collected":1,"loan_penalty_minor":1,"bc_regular_kist_penalty":1,
+                  "bc_penalty_minor":1,"other_penalty":1,"other_penalty_value":1,"other_penalty_minor":1,
+                  "payment_category":1,"penalty_category":1}
+    component_keys = ("bank_interest", "loan_interest", "other_interest", "loan_penalties", "bc_penalties", "other_penalties", "other_income")
+    components = {key: 0 for key in component_keys}
+    income_minor = 0
+    expense_minor = 0
+    income_count = 0
+    entries = []
+    monthly = {}
+
+    async for tx in db.transactions.find(tx_query, projection).sort([("date", -1), ("created_at", -1), ("_id", -1)]):
+        parts = profit_components(tx)
+        amount = int(parts["income_total"])
+        for key in component_keys: components[key] += int(parts[key])
+        income_minor += amount
+        if amount:
+            if entry_offset <= income_count < entry_offset + max(0, entry_limit):
+                entries.append({**tx, "profit_components_minor": parts, "profit_amount_minor": amount})
+            income_count += 1
+        dt = tx.get("date") or tx.get("created_at")
+        if isinstance(dt, datetime):
+            month_key = dt.strftime("%Y-%m")
+            bucket = monthly.setdefault(month_key, {"income_minor":0,"expenses_minor":0, **{key:0 for key in component_keys}})
+            bucket["income_minor"] += amount
+            for key in component_keys: bucket[key] += int(parts[key])
+
+    async for expense in db.expenses.find(exp_query, {"amount":1,"amount_minor":1,"date":1,"created_at":1}):
+        amount = expense.get("amount_minor")
+        amount = abs(int(amount)) if amount is not None else abs(to_minor(expense.get("amount", 0) or 0))
+        expense_minor += amount
+        dt = expense.get("date") or expense.get("created_at")
+        if isinstance(dt, datetime):
+            month_key = dt.strftime("%Y-%m")
+            bucket = monthly.setdefault(month_key, {"income_minor":0,"expenses_minor":0, **{key:0 for key in component_keys}})
+            bucket["expenses_minor"] += amount
+
+    for bucket in monthly.values():
+        bucket["profit_minor"] = bucket["income_minor"] - bucket["expenses_minor"]
+    return {"income_minor":income_minor,"expense_minor":expense_minor,"net_profit_minor":income_minor-expense_minor,
+            "components_minor":components,"income_entries_count":income_count,"entries":entries,"monthly":monthly}
+
+
+async def tenant_summary(tenant_id: str, member_id: str | None = None):
+    """Return summary balances and canonical profit from the tenant's source ledger.
+
+    Balance and count buckets remain MongoDB aggregates; the profit engine streams
+    only projected accounting fields so dashboard, analytics and register agree.
+    """
+    db = get_db()
+    canonical_profit_task = profit_report(tenant_id)
+    tenant, tx_stats_rows, exp_stats_rows, member_stats_rows, counts, canonical_profit = await asyncio.gather(
         db.tenants.find_one({"_id": oid(tenant_id)}),
         db.transactions.aggregate([
             {"$match": {"tenant_id": tenant_id}},
             {"$project": {
-                "type": 1,
+                "type": 1, "original_type": 1,
                 # Legacy blank/null accounts are cash throughout the ledger.
                 "account": {"$cond": [{"$in": [{"$ifNull": ["$account", ""]}, [""]]}, "cash", "$account"]},
                 "payment_category": 1,
                 "penalty_category": 1,
-                "amount": {"$convert": {"input": {"$ifNull": ["$amount", 0]}, "to": "double", "onError": 0, "onNull": 0}},
+                "amount": _mongo_amount_rupees_expr(),
                 "interest_value": {"$convert": {"input": {"$ifNull": ["$interest", 0]}, "to": "double", "onError": 0, "onNull": 0}},
-            "loan_interest_value": {"$convert": {"input": {"$ifNull": ["$loan_interest_collected", 0]}, "to": "double", "onError": 0, "onNull": 0}},
-            "loan_penalty_value": {"$convert": {"input": {"$ifNull": ["$loan_penalty_collected", 0]}, "to": "double", "onError": 0, "onNull": 0}},
-            "bc_penalty_value": {"$convert": {"input": {"$ifNull": ["$bc_regular_kist_penalty", 0]}, "to": "double", "onError": 0, "onNull": 0}},
                 "loan_interest_value": {"$convert": {"input": {"$ifNull": ["$loan_interest_collected", 0]}, "to": "double", "onError": 0, "onNull": 0}},
                 "loan_penalty_value": {"$convert": {"input": {"$ifNull": ["$loan_penalty_collected", 0]}, "to": "double", "onError": 0, "onNull": 0}},
                 "bc_penalty_value": {"$convert": {"input": {"$ifNull": ["$bc_regular_kist_penalty", 0]}, "to": "double", "onError": 0, "onNull": 0}},
@@ -64,19 +143,25 @@ async def tenant_summary(tenant_id: str, member_id: str | None = None):
             }},
             {"$group": {
                 "_id": None,
-                "contributions": {"$sum": {"$cond": [{"$eq": ["$type", "contribution"]}, "$amount", 0]}},
-                "regular_contributions": {"$sum": {"$cond": [{"$and": [{"$eq": ["$type", "contribution"]}, {"$or": [{"$eq": ["$payment_category", "monthly_kist"]}, {"$eq": ["$payment_category", None]}, {"$eq": [{"$type": "$payment_category"}, "missing"]}]}]}, "$amount", 0]}},
-                "interest": {"$sum": {"$cond": [{"$eq": ["$type", "interest"]}, "$amount", 0]}},
-                "penalties": {"$sum": {"$add": ["$bc_penalty_value", "$loan_penalty_value", "$other_penalty_value"]}},
-                "bc_penalties": {"$sum": {"$add": ["$bc_penalty_value", {"$cond": [{"$and": [{"$eq": ["$type", "penalty"]}, {"$ne": ["$payment_category", "loan"]}, {"$eq": ["$bc_penalty_value", 0]}]}, "$amount", 0]}]}},
-                "loan_penalties": {"$sum": {"$add": ["$loan_penalty_value", {"$cond": [{"$and": [{"$eq": ["$type", "penalty"]}, {"$or": [{"$eq": ["$payment_category", "loan"]}, {"$eq": ["$penalty_category", "loan"]}]}, {"$eq": ["$loan_penalty_value", 0]}]}, "$amount", 0]}]}},
-                "repayments": {"$sum": {"$cond": [{"$eq": ["$type", "loan_repayment"]}, "$amount", 0]}},
+                "contributions": {"$sum": {"$cond": [{"$or": [{"$eq": ["$type", "contribution"]}, {"$and": [{"$eq": ["$type", "reversal"]}, {"$eq": ["$original_type", "contribution"]}]}]}, "$amount", 0]}},
+                "regular_contributions": {"$sum": {"$cond": [{"$and": [{"$or": [{"$eq": ["$type", "contribution"]}, {"$and": [{"$eq": ["$type", "reversal"]}, {"$eq": ["$original_type", "contribution"]}]}]}, {"$or": [{"$eq": ["$payment_category", "monthly_kist"]}, {"$eq": ["$payment_category", None]}, {"$eq": [{"$type": "$payment_category"}, "missing"]}]}]}, "$amount", 0]}},
+                # Interest is classified once by source. Bank-account interest is
+                # bank interest; tagged/legacy non-bank interest is other interest.
+                "interest": {"$sum": {"$cond": [{"$and": [{"$or": [{"$eq": ["$type", "interest"]}, {"$and": [{"$eq": ["$type", "reversal"]}, {"$eq": ["$original_type", "interest"]}]}]}, {"$eq": ["$account", "bank"]}]}, "$amount", 0]}},
+                "penalties": {"$sum": {"$add": [
+                    {"$cond": [{"$ne": ["$bc_penalty_value", 0]}, "$bc_penalty_value", {"$cond": [{"$and": [{"$eq": ["$type", "penalty"]}, {"$or": [{"$eq": ["$payment_category", "bc"]}, {"$eq": ["$penalty_category", "bc"]}, {"$and": [{"$in": [{"$type": "$payment_category"}, ["missing", "null"]]}, {"$in": [{"$type": "$penalty_category"}, ["missing", "null"]]}]}] }]}, "$amount", 0]}]},
+                    {"$cond": [{"$ne": ["$loan_penalty_value", 0]}, "$loan_penalty_value", {"$cond": [{"$and": [{"$eq": ["$type", "penalty"]}, {"$or": [{"$eq": ["$payment_category", "loan"]}, {"$eq": ["$penalty_category", "loan"]}] }]}, "$amount", 0]}]},
+                    {"$cond": [{"$ne": ["$other_penalty_value", 0]}, "$other_penalty_value", {"$cond": [{"$and": [{"$eq": ["$type", "penalty"]}, {"$eq": ["$payment_category", "other"]}]}, "$amount", 0]}]}
+                ]}},
+                "bc_penalties": {"$sum": {"$cond": [{"$ne": ["$bc_penalty_value", 0]}, "$bc_penalty_value", {"$cond": [{"$and": [{"$eq": ["$type", "penalty"]}, {"$or": [{"$eq": ["$payment_category", "bc"]}, {"$eq": ["$penalty_category", "bc"]}] }]}, "$amount", 0]}]}},
+                "loan_penalties": {"$sum": {"$cond": [{"$ne": ["$loan_penalty_value", 0]}, "$loan_penalty_value", {"$cond": [{"$and": [{"$eq": ["$type", "penalty"]}, {"$or": [{"$eq": ["$payment_category", "loan"]}, {"$eq": ["$penalty_category", "loan"]}] }]}, "$amount", 0]}]}},
+                "repayments": {"$sum": {"$cond": [{"$or": [{"$eq": ["$type", "loan_repayment"]}, {"$and": [{"$eq": ["$type", "reversal"]}, {"$eq": ["$original_type", "loan_repayment"]}]}]}, "$amount", 0]}},
                 "loan_disbursed": {"$sum": {"$cond": [{"$eq": ["$type", "loan_disbursement"]}, {"$abs": "$amount"}, 0]}},
                 "cash_asset_outflow": {"$sum": {"$cond": [{"$and": [{"$in": ["$type", ["loan_disbursement", "investment_disbursement", "asset_purchase"]]}, {"$eq": [{"$ifNull": ["$account", "cash"]}, "cash"]}]}, {"$abs": "$amount"}, 0]}},
                 "bank_asset_outflow": {"$sum": {"$cond": [{"$and": [{"$in": ["$type", ["loan_disbursement", "investment_disbursement", "asset_purchase"]]}, {"$eq": [{"$ifNull": ["$account", "cash"]}, "bank"]}]}, {"$abs": "$amount"}, 0]}},
-                "loan_interest_income": {"$sum": {"$cond": [{"$gt": ["$loan_interest_value", 0]}, "$loan_interest_value", {"$cond": [{"$eq": ["$type", "loan_repayment"]}, "$interest_value", 0]}]}},
-                "other_interest_income": {"$sum": {"$add": ["$other_interest_value", {"$cond": [{"$and": [{"$eq": ["$type", "interest"]}, {"$eq": ["$payment_category", "other_interest"]}]}, "$amount", 0]}]}},
-                "other_penalty_income": {"$sum": {"$add": ["$other_penalty_value", {"$cond": [{"$and": [{"$eq": ["$type", "penalty"]}, {"$eq": ["$payment_category", "other"]}]}, "$amount", 0]}]}},
+                "loan_interest_income": {"$sum": {"$cond": [{"$ne": ["$loan_interest_value", 0]}, "$loan_interest_value", {"$cond": [{"$eq": ["$type", "loan_repayment"]}, "$interest_value", 0]}]}},
+                "other_interest_income": {"$sum": {"$cond": [{"$and": [{"$ne": ["$other_interest_value", 0]}, {"$ne": ["$account", "bank"]}, {"$ne": ["$payment_category", "bank_interest"]}]}, "$other_interest_value", {"$cond": [{"$and": [{"$or": [{"$eq": ["$type", "interest"]}, {"$and": [{"$eq": ["$type", "reversal"]}, {"$eq": ["$original_type", "interest"]}]}]}, {"$ne": ["$account", "bank"]}, {"$ne": ["$payment_category", "bank_interest"]}]}, "$amount", 0]}]}},
+                "other_penalty_income": {"$sum": {"$cond": [{"$ne": ["$other_penalty_value", 0]}, "$other_penalty_value", {"$cond": [{"$and": [{"$eq": ["$type", "penalty"]}, {"$eq": ["$payment_category", "other"]}]}, "$amount", 0]}]}},
                 "tx_inflow": {"$sum": {"$cond": [{"$and": ["$is_real", {"$gt": ["$amount", 0]}]}, "$amount", 0]}},
                 "tx_outflow": {"$sum": {"$cond": [{"$and": ["$is_real", {"$lt": ["$amount", 0]}]}, {"$abs": "$amount"}, 0]}},
                 "cash_inflow": {"$sum": {"$cond": [{"$and": ["$is_real", {"$eq": [{"$ifNull": ["$account", "cash"]}, "cash"]}, {"$gt": ["$amount", 0]}]}, "$amount", 0]}},
@@ -84,7 +169,10 @@ async def tenant_summary(tenant_id: str, member_id: str | None = None):
                 "cash_outflow_tx": {"$sum": {"$cond": [{"$and": ["$is_real", {"$eq": [{"$ifNull": ["$account", "cash"]}, "cash"]}, {"$lt": ["$amount", 0]}]}, {"$abs": "$amount"}, 0]}},
                 "bank_outflow_tx": {"$sum": {"$cond": [{"$and": ["$is_real", {"$eq": [{"$ifNull": ["$account", "cash"]}, "bank"]}, {"$lt": ["$amount", 0]}]}, {"$abs": "$amount"}, 0]}},
                 "other_income": {"$sum": {"$cond": [
-                    {"$and": ["$is_real", {"$not": [{"$in": ["$type", ["contribution", "loan_repayment", "loan_disbursement", "interest", "penalty"]]}]}, {"$gt": ["$amount", 0]}]},
+                    {"$and": ["$is_real", {"$or": [
+                        {"$and": [{"$ne": ["$type", "reversal"]}, {"$not": [{"$in": ["$type", ["contribution", "loan_repayment", "loan_disbursement", "interest", "penalty", "transfer", "cash_bank_transfer"]]}]}, {"$gt": ["$amount", 0]}]},
+                        {"$and": [{"$eq": ["$type", "reversal"]}, {"$not": [{"$in": ["$original_type", ["contribution", "loan_repayment", "loan_disbursement", "interest", "penalty", "transfer", "cash_bank_transfer", "expense_allocation", "expense"]]}]}, {"$lt": ["$amount", 0]}]}
+                    ]}]},
                     "$amount", 0,
                 ]}},
                 "real_tx_count": {"$sum": {"$cond": ["$is_real", 1, 0]}},
@@ -93,7 +181,7 @@ async def tenant_summary(tenant_id: str, member_id: str | None = None):
         db.expenses.aggregate([
             {"$match": {"tenant_id": tenant_id}},
             {"$project": {
-                "amount": {"$convert": {"input": {"$ifNull": ["$amount", 0]}, "to": "double", "onError": 0, "onNull": 0}},
+                "amount": _mongo_amount_rupees_expr(),
                 "account": {"$cond": [{"$in": [{"$ifNull": ["$account", ""]}, [""]]}, "cash", "$account"]},
             }},
             {"$group": {
@@ -105,10 +193,10 @@ async def tenant_summary(tenant_id: str, member_id: str | None = None):
         ]).to_list(1),
         db.transactions.aggregate([
             {"$match": {"tenant_id": tenant_id, "member_id": member_id}} if member_id else {"$match": {"tenant_id": tenant_id, "_id": {"$exists": False}}},
-            {"$project": {"type": 1, "amount": {"$convert": {"input": {"$ifNull": ["$amount", 0]}, "to": "double", "onError": 0, "onNull": 0}}}},
+            {"$project": {"type": 1, "original_type": 1, "amount": _mongo_amount_rupees_expr()}},
             {"$group": {
                 "_id": None,
-                "regular_contributions": {"$sum": {"$cond": [{"$eq": ["$type", "contribution"]}, "$amount", 0]}},
+                "regular_contributions": {"$sum": {"$cond": [{"$or": [{"$eq": ["$type", "contribution"]}, {"$and": [{"$eq": ["$type", "reversal"]}, {"$eq": ["$original_type", "contribution"]}]}]}, "$amount", 0]}},
                 "net_balance": {"$sum": "$amount"},
                 "expenses": {"$sum": {"$cond": [{"$eq": ["$type", "expense_allocation"]}, {"$abs": "$amount"}, 0]}},
             }},
@@ -122,6 +210,7 @@ async def tenant_summary(tenant_id: str, member_id: str | None = None):
             db.loans.count_documents({"tenant_id": tenant_id, "status": "active"}),
             db.shares.count_documents({"tenant_id": tenant_id, "member_id": member_id, "status": "active"}) if member_id else asyncio.sleep(0, result=0),
         ),
+        canonical_profit_task,
     )
 
     if not tenant:
@@ -133,18 +222,25 @@ async def tenant_summary(tenant_id: str, member_id: str | None = None):
 
     opening_cash = float(tenant.get("opening_cash", 0) or 0)
     opening_bank = float(tenant.get("opening_bank", 0) or 0)
-    interest = float(tx.get("interest", 0) or 0)
-    penalties = float(tx.get("penalties", 0) or 0)
-    bc_penalties = float(tx.get("bc_penalties", 0) or 0)
-    loan_penalties = float(tx.get("loan_penalties", 0) or 0)
-    loan_interest_income = float(tx.get("loan_interest_income", 0) or 0)
-    other_interest_income = float(tx.get("other_interest_income", 0) or 0)
-    other_income = float(tx.get("other_income", 0) or 0)
-    # Banking-style accounting: profit is earned income only. Expenses and
-    # loan principal movements never reduce Group Profit.
-    profit_income = loan_interest_income + other_interest_income + bc_penalties + loan_penalties - exp_total
-    bc_fund = float(tx.get("regular_contributions", 0) or 0) + interest + penalties + loan_interest_income
-    exp_total = float(exp.get("total", 0) or 0)
+    # All profit-related dashboard buckets come from the same integer-paise
+    # source-ledger classifier as Analytics and the Financial Register. Do not
+    # expose the older Mongo aggregate's subtly different category arithmetic.
+    canonical_parts = canonical_profit.get("components_minor", {})
+    interest = int(canonical_parts.get("bank_interest", 0) or 0) / 100
+    bc_penalties = int(canonical_parts.get("bc_penalties", 0) or 0) / 100
+    loan_penalties = int(canonical_parts.get("loan_penalties", 0) or 0) / 100
+    other_penalties = int(canonical_parts.get("other_penalties", 0) or 0) / 100
+    penalties = bc_penalties + loan_penalties + other_penalties
+    loan_interest_income = int(canonical_parts.get("loan_interest", 0) or 0) / 100
+    other_interest_income = int(canonical_parts.get("other_interest", 0) or 0) / 100
+    other_income = int(canonical_parts.get("other_income", 0) or 0) / 100
+    # Define expenses before using it so an empty expense aggregate is safe.
+    exp_total = int(canonical_profit.get("expense_minor", 0) or 0) / 100
+    # Principal repayments and loan disbursements are balance-sheet movements,
+    # not profit. Expenses are costs. Profit is canonical across all read models.
+    profit_income_minor = int(canonical_profit["net_profit_minor"])
+    profit_income = profit_income_minor / 100
+    bc_fund = float(tx.get("regular_contributions", 0) or 0) + interest + penalties + loan_interest_income + other_interest_income
 
     cash = opening_cash + float(tx.get("cash_inflow", 0) or 0) - float(tx.get("cash_outflow_tx", 0) or 0) - float(exp.get("cash", 0) or 0)
     bank = opening_bank + float(tx.get("bank_inflow", 0) or 0) - float(tx.get("bank_outflow_tx", 0) or 0) - float(exp.get("bank", 0) or 0)
@@ -159,7 +255,7 @@ async def tenant_summary(tenant_id: str, member_id: str | None = None):
 
     member_profit = None
     if member_id:
-        member_profit = round((profit_income / max(1, active_share_count)) * member_share_count, 2)
+        member_profit = float(from_minor(allocate_minor(profit_income_minor, member_share_count, active_share_count)))
 
     return {
         "vault_balance": net_group_vault,
@@ -181,7 +277,8 @@ async def tenant_summary(tenant_id: str, member_id: str | None = None):
         "penalties": round(penalties, 2),
         "bc_penalties": round(bc_penalties, 2),
         "loan_penalties": round(loan_penalties, 2),
-        "other_penalties": round(float(tx.get("other_penalty_income", 0) or 0), 2),
+        "other_penalties": round(other_penalties, 2),
+        "other_income": round(other_income, 2),
         "loan_disbursed": round(float(tx.get("loan_disbursed", 0) or 0), 2),
         "loan_repayments": round(float(tx.get("repayments", 0) or 0), 2),
         "expenses": round(exp_total, 2),
@@ -240,24 +337,37 @@ async def analytics(tenant_id: str, months: int = 12, share_no: int | None = Non
         return [
             {"$match": match},
             {"$project": {
-                "date": 1, "type": 1, "payment_category": 1, "penalty_category": 1,
-                "amount": {"$convert": {"input": {"$ifNull": ["$amount", 0]}, "to": "double", "onError": 0, "onNull": 0}},
+                "date": 1, "type": 1, "original_type": 1, "payment_category": 1, "penalty_category": 1,
+                "amount": _mongo_amount_rupees_expr(),
                 "interest_value": {"$convert": {"input": {"$ifNull": ["$interest", 0]}, "to": "double", "onError": 0, "onNull": 0}},
-                "bc_penalty_value": {"$convert": {"input": {"$ifNull": ["$bc_penalty_value", 0]}, "to": "double", "onError": 0, "onNull": 0}},
-                "loan_penalty_value": {"$convert": {"input": {"$ifNull": ["$loan_penalty_value", 0]}, "to": "double", "onError": 0, "onNull": 0}},
-                "loan_interest_value": {"$convert": {"input": {"$ifNull": ["$loan_interest_value", 0]}, "to": "double", "onError": 0, "onNull": 0}},
+                "bc_penalty_value": {"$convert": {"input": {"$ifNull": ["$bc_regular_kist_penalty", 0]}, "to": "double", "onError": 0, "onNull": 0}},
+                "loan_penalty_value": {"$convert": {"input": {"$ifNull": ["$loan_penalty_collected", 0]}, "to": "double", "onError": 0, "onNull": 0}},
+                "other_penalty_value": {"$convert": {"input": {"$ifNull": ["$other_penalty", 0]}, "to": "double", "onError": 0, "onNull": 0}},
+                "loan_interest_value": {"$convert": {"input": {"$ifNull": ["$loan_interest_collected", 0]}, "to": "double", "onError": 0, "onNull": 0}},
+                "other_interest_value": {"$convert": {"input": {"$ifNull": ["$other_interest", 0]}, "to": "double", "onError": 0, "onNull": 0}},
+                "account": {"$ifNull": ["$account", "cash"]},
             }},
             {"$group": {
                 "_id": {"month": {"$dateToString": {"format": "%Y-%m", "date": "$date", "timezone": "UTC"}}},
-                "contributions": {"$sum": {"$cond": [{"$eq": ["$type", "contribution"]}, "$amount", 0]}},
-                "interest": {"$sum": {"$cond": [{"$eq": ["$type", "interest"]}, "$amount", 0]}},
+                "contributions": {"$sum": {"$cond": [{"$or": [{"$eq": ["$type", "contribution"]}, {"$and": [{"$eq": ["$type", "reversal"]}, {"$eq": ["$original_type", "contribution"]}]}]}, "$amount", 0]}},
+                "interest": {"$sum": {"$cond": [{"$and": [{"$or": [{"$eq": ["$type", "interest"]}, {"$and": [{"$eq": ["$type", "reversal"]}, {"$eq": ["$original_type", "interest"]}]}]}, {"$eq": ["$account", "bank"]}]}, "$amount", 0]}},
+                "other_interest": {"$sum": {"$cond": [{"$and": [{"$or": [{"$eq": ["$type", "interest"]}, {"$and": [{"$eq": ["$type", "reversal"]}, {"$eq": ["$original_type", "interest"]}]}]}, {"$ne": ["$account", "bank"]}]}, "$amount", 0]}},
                 "bc_penalties": {"$sum": {"$add": ["$bc_penalty_value", {"$cond": [{"$and": [{"$eq": ["$type", "penalty"]}, {"$ne": ["$payment_category", "loan"]}, {"$ne": ["$payment_category", "other"]}, {"$eq": ["$bc_penalty_value", 0]}]}, "$amount", 0]}]}},
                 "loan_penalties": {"$sum": {"$add": ["$loan_penalty_value", {"$cond": [{"$and": [{"$eq": ["$type", "penalty"]}, {"$or": [{"$eq": ["$payment_category", "loan"]}, {"$eq": ["$penalty_category", "loan"]}]}, {"$eq": ["$loan_penalty_value", 0]}]}, "$amount", 0]}]}},
-                "loan_interest": {"$sum": {"$cond": [{"$gt": ["$loan_interest_value", 0]}, "$loan_interest_value", {"$cond": [{"$eq": ["$type", "loan_repayment"]}, "$interest_value", 0]}]}},
-                "repayments": {"$sum": {"$cond": [{"$eq": ["$type", "loan_repayment"]}, "$amount", 0]}},
-                "other_income": {"$sum": {"$cond": [{"$and": [
-                    {"$not": [{"$in": ["$type", ["contribution", "loan_repayment", "loan_disbursement", "expense_allocation", "expense", "interest", "penalty"]]}]},
-                    {"$gt": ["$amount", 0]},
+                "other_penalties": {"$sum": {"$add": ["$other_penalty_value", {"$cond": [{"$and": [{"$eq": ["$type", "penalty"]}, {"$eq": ["$payment_category", "other"]}, {"$eq": ["$other_penalty_value", 0]}]}, "$amount", 0]}]}},
+                "loan_interest": {"$sum": {"$cond": [{"$ne": ["$loan_interest_value", 0]}, "$loan_interest_value", {"$cond": [{"$eq": ["$type", "loan_repayment"]}, "$interest_value", 0]}]}},
+                "repayments": {"$sum": {"$cond": [{"$or": [{"$eq": ["$type", "loan_repayment"]}, {"$and": [{"$eq": ["$type", "reversal"]}, {"$eq": ["$original_type", "loan_repayment"]}]}]}, "$amount", 0]}},
+                "other_income": {"$sum": {"$cond": [{"$or": [
+                    {"$and": [
+                        {"$ne": ["$type", "reversal"]},
+                        {"$not": [{"$in": ["$type", ["contribution", "loan_repayment", "loan_disbursement", "expense_allocation", "expense", "interest", "penalty", "transfer", "cash_bank_transfer"]]}]},
+                        {"$gt": ["$amount", 0]},
+                    ]},
+                    {"$and": [
+                        {"$eq": ["$type", "reversal"]},
+                        {"$not": [{"$in": ["$original_type", ["contribution", "loan_repayment", "loan_disbursement", "expense_allocation", "expense", "interest", "penalty", "transfer", "cash_bank_transfer"]]}]},
+                        {"$lt": ["$amount", 0]},
+                    ]},
                 ]}, "$amount", 0]}},
             }},
         ]
@@ -266,12 +376,13 @@ async def analytics(tenant_id: str, months: int = 12, share_no: int | None = Non
     personal_tx_task = db.transactions.aggregate(transaction_pipeline(personal_match)).to_list(None) if personal_match else asyncio.sleep(0, result=[])
     exp_task = db.expenses.aggregate([
         {"$match": {"tenant_id": tenant_id, "date": {"$gte": start, "$lt": end}}},
-        {"$project": {"date": 1, "amount": {"$convert": {"input": {"$ifNull": ["$amount", 0]}, "to": "double", "onError": 0, "onNull": 0}}}},
+        {"$project": {"date": 1, "amount": _mongo_amount_rupees_expr()}},
         {"$group": {"_id": {"month": {"$dateToString": {"format": "%Y-%m", "date": "$date", "timezone": "UTC"}}}, "expenses": {"$sum": "$amount"}}},
     ]).to_list(None)
 
-    group_rows, personal_rows, exp_rows, member_share_count, active_share_count = await asyncio.gather(
-        group_tx_task, personal_tx_task, exp_task, member_share_count_task, active_shares_task
+    group_rows, personal_rows, exp_rows, member_share_count, active_share_count, canonical_profit = await asyncio.gather(
+        group_tx_task, personal_tx_task, exp_task, member_share_count_task, active_shares_task,
+        profit_report(tenant_id, start, end),
     )
     group_map = {str(x["_id"]["month"]): x for x in group_rows}
     personal_map = {str(x["_id"]["month"]): x for x in personal_rows}
@@ -284,20 +395,32 @@ async def analytics(tenant_id: str, months: int = 12, share_no: int | None = Non
         key = start_month.strftime("%Y-%m")
         group_x = group_map.get(key, {})
         x = personal_map.get(key, {}) if member_id else group_x
-        group_expense_total = exp_map.get(key, 0.0)
-        interest_income = float(x.get("interest", 0) or 0)
-        loan_interest_income = float(x.get("loan_interest", 0) or 0)
-        bc_penalties = float(group_x.get("bc_penalties", 0) or 0)
-        loan_penalties = float(group_x.get("loan_penalties", 0) or 0)
-        other_income = float(x.get("other_income", 0) or 0)
+        # Profit and its source buckets are read from the shared paise engine.
+        # The older aggregation remains for non-profit member activity metrics,
+        # but cannot override the financial report's income classification.
+        canonical_month = canonical_profit.get("monthly", {}).get(key, {})
+        canonical_parts = canonical_month
+        if not member_id:
+            group_expense_total = int(canonical_month.get("expenses_minor", 0) or 0) / 100
+            interest_income = int(canonical_parts.get("bank_interest", 0) or 0) / 100
+            other_interest_income = int(canonical_parts.get("other_interest", 0) or 0) / 100
+            loan_interest_income = int(canonical_parts.get("loan_interest", 0) or 0) / 100
+            bc_penalties = int(canonical_parts.get("bc_penalties", 0) or 0) / 100
+            loan_penalties = int(canonical_parts.get("loan_penalties", 0) or 0) / 100
+            other_penalties = int(canonical_parts.get("other_penalties", 0) or 0) / 100
+            other_income = int(canonical_parts.get("other_income", 0) or 0) / 100
+        else:
+            interest_income = float(x.get("interest", 0) or 0)
+            other_interest_income = float(x.get("other_interest", 0) or 0)
+            loan_interest_income = float(x.get("loan_interest", 0) or 0)
+            bc_penalties = float(group_x.get("bc_penalties", 0) or 0)
+            loan_penalties = float(group_x.get("loan_penalties", 0) or 0)
+            other_penalties = float(group_x.get("other_penalties", 0) or 0)
+            other_income = float(x.get("other_income", 0) or 0)
         # Profit allocation uses group income internally, but personal mode only
         # returns the caller's share rather than the full group profit.
-        group_profit_income = loan_interest_income if member_id else float(group_x.get("loan_interest", 0) or 0)
-        if member_id:
-            group_profit_income = float(group_x.get("loan_interest", 0) or 0) + float(group_x.get("other_interest", 0) or 0) + bc_penalties + loan_penalties - float(group_expense_total or 0)
-        else:
-            group_profit_income = float(group_x.get("loan_interest", 0) or 0) + float(group_x.get("other_interest", 0) or 0) + bc_penalties + loan_penalties - float(group_expense_total or 0)
-        member_profit = round((group_profit_income / active_shares) * member_share_count, 2) if member_id else None
+        group_profit_income = int(canonical_month.get("profit_minor", 0) or 0) / 100
+        member_profit = float(from_minor(allocate_minor(int(canonical_month.get("profit_minor", 0) or 0), member_share_count, active_shares))) if member_id else None
         member_expenses = round((group_expense_total / active_shares) * member_share_count, 2) if member_id else None
         visible_profit = member_profit if member_id else round(group_profit_income, 2)
         visible_expenses = member_expenses if member_id else round(group_expense_total, 2)
@@ -305,7 +428,14 @@ async def analytics(tenant_id: str, months: int = 12, share_no: int | None = Non
         rows.append({
             "month": start_month.strftime("%b %y"), "year": start_month.year, "month_key": key,
             "contributions": round(float(x.get("contributions", 0) or 0), 2),
-            "interest": round(interest_income + loan_interest_income + other_income, 2),
+            "interest": round(interest_income + other_interest_income + loan_interest_income, 2),
+            "bank_interest": round(interest_income, 2),
+            "other_interest": round(other_interest_income, 2),
+            "loan_interest": round(loan_interest_income, 2),
+            "bc_penalties": round(bc_penalties, 2),
+            "loan_penalties": round(loan_penalties, 2),
+            "other_penalties": round(other_penalties, 2),
+            "other_income": round(other_income, 2),
             "repayments": round(float(x.get("repayments", 0) or 0), 2),
             "expenses": visible_expenses, "profit": visible_profit, "profit_per_share": visible_per_share,
             "member_profit": member_profit, "member_expenses": member_expenses,
@@ -315,43 +445,28 @@ async def analytics(tenant_id: str, months: int = 12, share_no: int | None = Non
 
 
 async def backfill_legacy_expense_allocations():
-    """Best-effort one-time migration for expenses created by older builds.
+    """Repair complete and partial legacy expense allocations in paise.
 
-    This intentionally runs outside request/response paths. New expenses already
-    create their allocations synchronously with a bulk write.
+    The source expense remains authoritative. The shared allocator stores an
+    immutable share plan, upserts every planned allocation, and can resume after
+    a crash even when only some child rows were previously written.
     """
     db = get_db()
-    try:
-        tenant_cursor = db.tenants.find({"expense_allocation_backfill_at": {"$exists": False}}, {"_id": 1})
-        from pymongo import UpdateOne
-        async for tenant in tenant_cursor:
-            tenant_id = str(tenant["_id"])
-            shares = await db.shares.find({"tenant_id": tenant_id, "status": "active"}).sort("share_no", 1).to_list(10000)
-            if not shares:
-                await db.tenants.update_one({"_id": tenant["_id"]}, {"$set": {"expense_allocation_backfill_at": datetime.now(timezone.utc)}})
-                continue
-            existing = set(await db.transactions.distinct("expense_id", {"tenant_id": tenant_id, "type": "expense_allocation"}))
-            ops=[]
-            expense_count=0
-            async for expense in db.expenses.find({"tenant_id": tenant_id}).sort([("date",1),("_id",1)]):
-                expense_count += 1
-                expense_id=str(expense["_id"])
-                if expense_id in existing: continue
-                total=float(expense.get("amount",0) or 0); per=round(total/len(shares),2); allocated=0.0
-                for i,share in enumerate(shares):
-                    amount=round(total-allocated,2) if i==len(shares)-1 else per
-                    allocated=round(allocated+amount,2)
-                    ops.append(UpdateOne(
-                        {"tenant_id":tenant_id,"expense_id":expense_id,"share_id":str(share["_id"]),"type":"expense_allocation"},
-                        {"$setOnInsert":{
-                            "tenant_id":tenant_id,"member_id":str(share["member_id"]),"share_id":str(share["_id"]),"share_no":int(share["share_no"]),
-                            "expense_id":expense_id,"type":"expense_allocation","amount":-amount,"account":expense.get("account","cash"),
-                            "date":expense.get("date"),"created_at":expense.get("created_at",datetime.now(timezone.utc)),
-                            "payment_category":"group_expense_allocation","note":expense.get("category","Group expense")
-                        }},upsert=True))
-                    if len(ops)>=1000:
-                        await db.transactions.bulk_write(ops,ordered=False); ops=[]
-            if ops: await db.transactions.bulk_write(ops,ordered=False)
-            await db.tenants.update_one({"_id": tenant["_id"]}, {"$set": {"expense_allocation_backfill_at": datetime.now(timezone.utc), "expense_allocation_backfill_count": expense_count}})
-    except Exception as exc:
-        print(f"[expense-backfill] skipped: {exc}", flush=True)
+    from .api.group import ensure_expense_allocations
+    tenant_cursor = db.tenants.find({"expense_allocation_backfill_at": {"$exists": False}}, {"_id": 1})
+    async for tenant in tenant_cursor:
+        tenant_id = str(tenant["_id"])
+        try:
+            async for expense in db.expenses.find({"tenant_id": tenant_id}).sort([("date", 1), ("_id", 1)]):
+                try:
+                    await ensure_expense_allocations(tenant_id, expense)
+                except Exception:
+                    # Continue other expenses, but leave the tenant marker unset
+                    # so the failed allocation is retried on next startup.
+                    raise
+            await db.tenants.update_one({"_id": tenant["_id"]}, {"$set": {"expense_allocation_backfill_at": datetime.now(timezone.utc)}})
+        except Exception:
+            # A tenant is retried as a whole; every individual expense is
+            # idempotent, so successfully repaired expenses are safe to revisit.
+            continue
+

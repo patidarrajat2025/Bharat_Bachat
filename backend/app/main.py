@@ -47,6 +47,43 @@ async def lifespan(app: FastAPI):
                 # remaining tenants from being backfilled.
                 logger.exception("Financial feed backfill failed for tenant_id=%s", tenant_id)
 
+    async def _recover_financial_side_effects():
+        # Source records are written first with a durable pending marker. If a
+        # process stops after the source write, resume feed/audit/notification
+        # work at startup. Every side effect is idempotent by source key.
+        from .api.group import _finalize_tx_side_effects, _finalize_expense_side_effects, _apply_loan_repayment_once, insert_tx
+        async for source in db.transactions.find({"side_effects_status":"pending"}):
+            try:
+                actor={"_id":source.get("created_by","system"),"role":source.get("created_by_role","system"),"phone":source.get("created_by_phone")}
+                await _finalize_tx_side_effects(source,actor)
+            except Exception:
+                logger.exception("Transaction side-effect recovery failed for transaction_id=%s", source.get("_id"))
+        async for source in db.transactions.find({"type":"loan_repayment","loan_apply_status":"pending"}):
+            try:
+                await _apply_loan_repayment_once(str(source.get("tenant_id")),source)
+            except Exception:
+                logger.exception("Loan repayment application recovery failed for transaction_id=%s", source.get("_id"))
+        async for loan in db.loans.find({"disbursement_status":"pending"}):
+            try:
+                actor={"_id":loan.get("created_by","system"),"role":loan.get("created_by_role","system"),"phone":loan.get("created_by_phone")}
+                tenant_id=str(loan.get("tenant_id")); loan_id=str(loan["_id"])
+                await insert_tx(tenant_id,str(loan.get("member_id")),"loan_disbursement",-float(loan.get("principal",0) or 0),loan.get("account","cash"),actor,loan_id=loan_id,date=loan.get("start_date") or loan.get("created_at"),note=loan.get("purpose",""),principal=-float(loan.get("principal",0) or 0),idempotency_key=f"loan-disbursement:{loan_id}")
+                await db.loans.update_one({"_id":loan["_id"],"tenant_id":tenant_id},{"$set":{"disbursement_status":"complete","disbursement_completed_at":datetime.now(timezone.utc)}})
+                from .audit import audit
+                await audit(tenant_id,actor,"LOAN_CREATED","loan",loan_id,{"principal":loan.get("principal",0)},event_key=f"loan-created:{loan_id}")
+            except Exception:
+                logger.exception("Loan disbursement recovery failed for loan_id=%s", loan.get("_id"))
+        async for source in db.expenses.find({"side_effects_status":"pending"}):
+            try:
+                actor={"_id":source.get("created_by","system"),"role":source.get("created_by_role","system"),"phone":source.get("created_by_phone")}
+                await _finalize_expense_side_effects(source,actor)
+            except Exception:
+                logger.exception("Expense side-effect recovery failed for expense_id=%s", source.get("_id"))
+
+    # Complete pending financial writes before the API starts accepting new
+    # payments. Recovery is bounded to explicitly pending outbox rows; the much
+    # larger legacy read-model backfills remain background tasks.
+    await _run_background_backfill("financial side-effect recovery", _recover_financial_side_effects())
     asyncio.create_task(_run_background_backfill(
         "legacy expense allocations", backfill_legacy_expense_allocations()
     ))

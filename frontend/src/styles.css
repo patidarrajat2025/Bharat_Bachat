@@ -3121,3 +3121,12 @@ button,.btn-primary,.btn-secondary,.input,textarea,select{font-size:15px}
 .modal-head>.icon-btn{flex:0 0 auto;margin-left:auto}
 .header-brand{display:flex;align-items:center;flex:1;min-width:0;gap:10px}
 .header-app-title{flex:1;min-width:0;white-space:nowrap;font-weight:700;color:#fff}
+
+/* 2026-10-10 verified patch: prevent header branding from colliding with action icons on narrow screens. */
+@media(max-width:520px){.figma-header .header-brand{min-width:0!important;flex:1 1 auto!important;overflow:hidden}.figma-header .header-brand .header-app-title{min-width:0!important;overflow:hidden;text-overflow:ellipsis;white-space:nowrap!important}}
+
+/* Oct 10 fix: keep the five-item admin bottom navigation visible on phones. */
+@media(max-width:640px){.mobile-nav:has(.mobile-nav-item:nth-child(5)){grid-template-columns:repeat(5,minmax(0,1fr))!important}.profit-source-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important}.profit-source-grid .accounting-source-card{min-width:0!important}}
+
+/* Keep the actual group name legible in the dashboard vault header despite legacy theme overrides. */
+.app-shell[data-route="/dashboard"] .dashboard-vault-head .dashboard-group-title h2{color:#fff!important;font-weight:800!important;min-width:0!important;max-width:100%!important;text-overflow:ellipsis!important;white-space:nowrap!important;overflow:hidden!important}

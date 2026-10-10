@@ -77,7 +77,7 @@ function InstallButton(){
 
 
 export function InstallBanner(){const [event,setEvent]=useState<InstallPromptEvent|null>(null);const {t}=useTranslation();useEffect(()=>{const h=(e:Event)=>{e.preventDefault();setEvent(e as InstallPromptEvent)};window.addEventListener('beforeinstallprompt',h);return()=>window.removeEventListener('beforeinstallprompt',h)},[]);if(!event)return null;return <div className="install-banner"><img src="/pwa-192.png"/><div><b>{t('installApp')}</b><span>{tr('Install Bharat Bachat on this device')}</span></div><button onClick={async()=>{await event.prompt();setEvent(null)}}>{tr('Install')}</button></div>}
-const mobileLabel=(key:string)=>({dashboard:'Home',members:'Members',register:'Cash Book',ledger:'Ledger',analytics:'Analytics',passbook:'Passbook',loans:'Loans',personalLoan:'My Loan',admin:'Admin',more:'More'} as Record<string,string>)[key]||key;
+const mobileLabel=(key:string)=>({dashboard:'Dashboard',members:'Members',register:'Financial Register',ledger:'Member Ledger',analytics:'Analytics',passbook:'Passbook',loans:'Loans',personalLoan:'My Loan',admin:'Admin',more:'More'} as Record<string,string>)[key]||key;
 
 export function Layout({children}:{children:ReactNode}){
   const {t}=useTranslation();
@@ -97,8 +97,14 @@ export function Layout({children}:{children:ReactNode}){
       ? ['/admin']
       : nav.map(x=>x[0]);
   const visible=nav.filter(x=>allowed.includes(x[0]));
-  const primary=visible.slice(0,4);
-  const hasMore=(user?.role as string)==='admin'||user?.role==='group_admin'||visible.length>4;
+  // Group admins get a fixed, explicit mobile navigation order. Do not derive
+  // this from the global nav array: adding a route must not silently reorder it.
+  const adminPrimaryPaths=['/dashboard','/members','/register','/ledger'];
+  const isGroupAdmin=['group_admin','admin'].includes(String(user?.role||''));
+  const primary=isGroupAdmin
+    ? visible.filter(x=>adminPrimaryPaths.includes(x[0])).sort((a,b)=>adminPrimaryPaths.indexOf(a[0])-adminPrimaryPaths.indexOf(b[0]))
+    : visible.slice(0,4);
+  const hasMore=isGroupAdmin||visible.length>4;
   const active=visible.find(x=>loc.pathname===x[0] || (x[0] !== '/dashboard' && loc.pathname.startsWith(`${x[0]}/`)));
   useEffect(()=>{setMore(false);setProfile(false)},[loc.pathname]);
   useEffect(()=>{let timer:number|undefined;const h=(e:Event)=>{const d=(e as CustomEvent).detail;window.clearTimeout(timer);setToast({message:String(d?.message||''),type:d?.type==='error'?'error':d?.type==='info'?'info':'success'});timer=window.setTimeout(()=>setToast(null),d?.type==='error'?5000:3200)};window.addEventListener('bb-toast',h);return()=>{window.clearTimeout(timer);window.removeEventListener('bb-toast',h)}},[]);
@@ -153,7 +159,7 @@ export function Layout({children}:{children:ReactNode}){
     </div>
 
     <nav className="mobile-nav safe-bottom" aria-label={tr("Primary navigation")}>
-      {primary.map(([to,label,Icon])=><Link key={to} to={to} className={`mobile-nav-item ${loc.pathname===to || (to!=='/dashboard' && loc.pathname.startsWith(`${to}/`))?'is-active':''}`}>{loc.pathname===to&&<motion.span layoutId="bb-nav-active" className="mobile-nav-active" transition={{type:'spring',stiffness:420,damping:30}}/>}<Icon size={19}/><span>{t(label)}</span></Link>)}
+      {primary.map(([to,label,Icon])=><Link key={to} to={to} className={`mobile-nav-item ${loc.pathname===to || (to!=='/dashboard' && loc.pathname.startsWith(`${to}/`))?'is-active':''}`}>{loc.pathname===to&&<motion.span layoutId="bb-nav-active" className="mobile-nav-active" transition={{type:'spring',stiffness:420,damping:30}}/>}<Icon size={19}/><span>{t(isGroupAdmin?mobileLabel(label):label)}</span></Link>)}
       {hasMore&&<button type="button" className={`mobile-nav-item ${active && !primary.some(x=>x[0]===active[0])?'is-active':''}`} onClick={()=>setMore(v=>!v)}><MoreHorizontal size={20}/><span>{t(mobileLabel('more'))}</span></button>}
     </nav>
 
