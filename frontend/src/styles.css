@@ -3100,3 +3100,13 @@ button,.btn-primary,.btn-secondary,.input,textarea,select{font-size:15px}
 .dashboard-hero-card .dashboard-group-title{flex:1;min-width:0}
 /* Member bottom navigation: give each destination enough room for readable labels. */
 @media(max-width:640px){.mobile-nav{grid-template-columns:repeat(4,minmax(0,1fr))!important}.mobile-nav-item{min-width:0!important;padding-left:4px!important;padding-right:4px!important;gap:5px!important}.mobile-nav-item span{font-size:11px!important;line-height:1.15!important;white-space:normal!important;overflow-wrap:anywhere!important;text-align:center!important}.mobile-nav-item svg{flex-shrink:0!important;width:20px!important;height:20px!important}}
+
+/* Oct 10 targeted modal/header visibility alignment */
+.header-brand{min-width:0;flex:1;}
+.header-app-title{display:block;overflow:hidden;text-overflow:ellipsis;line-height:1.1;}
+.dashboard-group-title h2{color:#fff!important;font-weight:700;}
+.bulk-share-input input{width:100%;min-width:0;max-width:100%;text-align:right;overflow:hidden;padding:8px 12px;border:1px solid #d8e2e8;border-radius:10px;box-sizing:border-box;}
+.modal-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:18px 20px;}
+.modal-head h2{min-width:0;flex:1;}
+.modal-head .icon-btn{flex:0 0 auto;margin-left:auto;}
+.modal-title-inline{display:flex;align-items:center;gap:8px;min-width:0;flex:1}.modal-title-inline h2{min-width:0;overflow-wrap:anywhere}.modal-title-inline svg{flex:0 0 auto;color:#0f9d58}

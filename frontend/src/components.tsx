@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { Link, useLocation } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
-import { BarChart3, BookOpen, ChevronDown, CreditCard, FileText, Home, LogOut, MoreHorizontal, Receipt, ShieldCheck, Smartphone, UserCircle, Users, WalletCards, X, Bell, Settings, Sun, Moon, Palette, Check, ArrowDownToLine, ArrowUpFromLine } from 'lucide-react';
+import { BarChart3, BookOpen, ChevronDown, CreditCard, FileText, Home, LogOut, MoreHorizontal, Receipt, ShieldCheck, Smartphone, UserCircle, Users, WalletCards, X, Bell, Settings, Sun, Moon, Palette, Check, ArrowDownToLine, ArrowUpFromLine, Info } from 'lucide-react';
 import { useStore } from './store';
 import { tr, trError, trDynamic, appLocale } from './i18n';
 import { api } from './api';
@@ -98,7 +98,7 @@ export function Layout({children}:{children:ReactNode}){
       : nav.map(x=>x[0]);
   const visible=nav.filter(x=>allowed.includes(x[0]));
   const primary=visible.slice(0,4);
-  const hasMore=visible.length>4;
+  const hasMore=user?.role==='group_admin'||visible.length>4;
   const active=visible.find(x=>loc.pathname===x[0] || (x[0] !== '/dashboard' && loc.pathname.startsWith(`${x[0]}/`)));
   useEffect(()=>{setMore(false);setProfile(false)},[loc.pathname]);
   useEffect(()=>{let timer:number|undefined;const h=(e:Event)=>{const d=(e as CustomEvent).detail;window.clearTimeout(timer);setToast({message:String(d?.message||''),type:d?.type==='error'?'error':d?.type==='info'?'info':'success'});timer=window.setTimeout(()=>setToast(null),d?.type==='error'?5000:3200)};window.addEventListener('bb-toast',h);return()=>{window.clearTimeout(timer);window.removeEventListener('bb-toast',h)}},[]);
@@ -114,7 +114,7 @@ export function Layout({children}:{children:ReactNode}){
   return <div className="app-shell" data-route={loc.pathname}><InstallBanner/>
     <header className="app-header safe-top figma-header">
       <div className="app-header-inner">
-        <Link to={user?.role==='super_admin'?'/admin':'/dashboard'} className="header-brand"><Logo compact/><span className="header-app-title">Bharat Bachat</span></Link>
+        <Link to={user?.role==='super_admin'?'/admin':'/dashboard'} className="header-brand"><Logo compact/><span className="header-app-title flex-1 min-w-0 text-white font-bold whitespace-nowrap">Bharat Bachat</span></Link>
         
         <div className="header-actions">
           <InstallButton/>
@@ -221,7 +221,7 @@ export function TextArea({label,...props}:any){
 export function Modal({title,onClose,children}:{title:string;onClose:()=>void;children:ReactNode}){
   const content=<div className="modal-backdrop" role="dialog" aria-modal="true" onMouseDown={e=>{if(e.target===e.currentTarget)onClose()}}>
     <div className={`modal-card ${/Loan|loan|Request|request/.test(title)?'loan-modal':''}`}>
-      <div className="modal-head"><h2>{title}</h2><button type="button" className="icon-btn" aria-label={tr("Close")} onClick={onClose}><X size={19}/></button></div>
+      <div className="modal-head"><div className="modal-title-inline">{/Monthly Kist Collection|Bulk Monthly Kist/.test(title)&&<Info size={18} aria-hidden="true"/>}<h2>{title}</h2></div><button type="button" className="icon-btn" aria-label={tr("Close")} onClick={onClose}><X size={19}/></button></div>
       <div className="modal-body">{children}</div>
     </div>
   </div>;

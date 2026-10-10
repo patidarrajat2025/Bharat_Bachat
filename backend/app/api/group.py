@@ -905,21 +905,25 @@ async def accounting_view(tenant_id:str, view:str, period:str|None=None, account
         # Profit / interest are derived from the transaction read model, with
         # totals aggregated in MongoDB and only the visible 10 rows materialized.
         if view=="profit":
-            feed={"tenant_id":tenant_id,"source_type":"transaction","$or":[{"loan_interest_collected":{"$gt":0}},{"loan_penalty_collected":{"$gt":0}},{"bc_regular_kist_penalty":{"$gt":0}},{"type":"penalty"}]}
+            feed={"tenant_id":tenant_id,"source_type":"transaction","$or":[{"loan_interest_collected":{"$gt":0}},{"loan_penalty_collected":{"$gt":0}},{"bc_regular_kist_penalty":{"$gt":0}},{"type":"penalty"},{"type":"interest"}]}
             rows=await db.financial_feed.find(feed).sort([("date",-1),("created_at",-1),("_id",-1)]).skip(offset).limit(page_size).to_list(page_size)
-            profit_expr={"$add":[{"$ifNull":["$loan_interest_collected",0]},{"$ifNull":["$loan_penalty_collected",0]},{"$ifNull":["$bc_regular_kist_penalty",0]}]}
+            profit_expr={"$add":[{"$ifNull":["$loan_interest_collected",0]},{"$ifNull":["$other_interest_value",0]},{"$ifNull":["$loan_penalty_collected",0]},{"$ifNull":["$bc_regular_kist_penalty",0]},{"$cond":[{"$and":[{"$eq":["$type","interest"]},{"$eq":[{"$ifNull":["$other_interest_value",0]},0]}]},{"$abs":{"$ifNull":["$amount",0]}},0]}]}
             # Legacy penalty rows may not have one of the explicit fields.
             legacy_penalty={"$cond":[{"$and":[{"$eq":["$type","penalty"]},{"$eq":[{"$ifNull":["$loan_penalty_collected",0]},0]},{"$eq":[{"$ifNull":["$bc_regular_kist_penalty",0]},0]}]}, {"$abs":{"$ifNull":["$amount",0]}}, 0]}
             profit_expr={"$add":[profit_expr,legacy_penalty]}
-            totals=await db.financial_feed.aggregate([{"$match":feed},{"$group":{"_id":None,"grand":{"$sum":profit_expr},"loan_interest":{"$sum":{"$ifNull":["$loan_interest_collected",0]}},"loan_penalties":{"$sum":{"$ifNull":["$loan_penalty_collected",0]}},"bc_penalties":{"$sum":{"$add":[{"$ifNull":["$bc_regular_kist_penalty",0]},legacy_penalty]}},"count":{"$sum":1}}}]).to_list(1)
+            totals=await db.financial_feed.aggregate([{"$match":feed},{"$group":{"_id":None,"grand":{"$sum":profit_expr},"loan_interest":{"$sum":{"$ifNull":["$loan_interest_collected",0]}},"other_interest":{"$sum":{"$add":[{"$ifNull":["$other_interest_value",0]},{"$cond":[{"$and":[{"$eq":["$type","interest"]},{"$eq":[{"$ifNull":["$other_interest_value",0]},0]}]},{"$abs":{"$ifNull":["$amount",0]}},0]}]}},"loan_penalties":{"$sum":{"$ifNull":["$loan_penalty_collected",0]}},"bc_penalties":{"$sum":{"$add":[{"$ifNull":["$bc_regular_kist_penalty",0]},legacy_penalty]}},"count":{"$sum":1}}}]).to_list(1)
             a=totals[0] if totals else {}; entries=[]
             for r in rows:
-                li=float(r.get("loan_interest_collected",0) or 0); lp=float(r.get("loan_penalty_collected",0) or 0); bp=float(r.get("bc_regular_kist_penalty",0) or 0)
+                li=float(r.get("loan_interest_collected",0) or 0); oi=float(r.get("other_interest_value",0) or 0); lp=float(r.get("loan_penalty_collected",0) or 0); bp=float(r.get("bc_regular_kist_penalty",0) or 0)
+                if r.get("type")=="interest" and not oi: oi=abs(float(r.get("amount",0) or 0))
                 if r.get("type")=="penalty" and not (li or lp or bp): bp=abs(float(r.get("amount",0) or 0))
-                amount=li+lp+bp
+                amount=li+oi+lp+bp
                 entries.append({"id":str(r.get("source_id") or r.get("_id")),"date":str(r.get("date") or r.get("created_at")),"member_name":"","type":r.get("type","profit"),"amount":round(amount,2),"account":r.get("account","cash"),"source":"Loan Interest" if li else "Loan Penalty" if lp else "BC Penalty","reason":r.get("note","")})
-            total=int(a.get("count",0) or 0); src={"loan_interest":float(a.get("loan_interest",0) or 0),"bc_penalties":float(a.get("bc_penalties",0) or 0),"loan_penalties":float(a.get("loan_penalties",0) or 0)}
-            return {"view":view,"entries":entries,"has_more":offset+len(entries)<total,"total_entries":total,"grand_total":round(float(a.get("grand",0) or 0),2),"sources":{k:round(v,2) for k,v in src.items()}}
+            total=int(a.get("count",0) or 0); src={"loan_interest":float(a.get("loan_interest",0) or 0),"other_interest":float(a.get("other_interest",0) or 0),"bc_penalties":float(a.get("bc_penalties",0) or 0),"loan_penalties":float(a.get("loan_penalties",0) or 0)}
+            expense_agg=await db.financial_feed.aggregate([{"$match":{"tenant_id":tenant_id,"source_type":"expense"}},{"$group":{"_id":None,"total":{"$sum":{"$abs":{"$ifNull":["$amount",0]}}}}}]).to_list(1)
+            total_expenses=float(expense_agg[0].get("total",0) or 0) if expense_agg else 0.0
+            earned=float(a.get("grand",0) or 0)
+            return {"view":view,"entries":entries,"has_more":offset+len(entries)<total,"total_entries":total,"grand_total":round(earned-total_expenses,2),"total_interest_and_penalties":round(earned,2),"total_expenses":round(total_expenses,2),"sources":{k:round(v,2) for k,v in src.items()}}
 
         if view=="interest":
             feed={"tenant_id":tenant_id,"source_type":"transaction","$or":[{"type":"interest","amount":{"$gt":0}},{"type":"loan_repayment","loan_interest_collected":{"$gt":0}}]}

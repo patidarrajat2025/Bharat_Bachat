@@ -142,7 +142,7 @@ async def tenant_summary(tenant_id: str, member_id: str | None = None):
     other_income = float(tx.get("other_income", 0) or 0)
     # Banking-style accounting: profit is earned income only. Expenses and
     # loan principal movements never reduce Group Profit.
-    profit_income = loan_interest_income + bc_penalties + loan_penalties
+    profit_income = loan_interest_income + other_interest_income + bc_penalties + loan_penalties - exp_total
     bc_fund = float(tx.get("regular_contributions", 0) or 0) + interest + penalties + loan_interest_income
     exp_total = float(exp.get("total", 0) or 0)
 
@@ -294,9 +294,9 @@ async def analytics(tenant_id: str, months: int = 12, share_no: int | None = Non
         # returns the caller's share rather than the full group profit.
         group_profit_income = loan_interest_income if member_id else float(group_x.get("loan_interest", 0) or 0)
         if member_id:
-            group_profit_income = float(group_x.get("loan_interest", 0) or 0) + bc_penalties + loan_penalties
+            group_profit_income = float(group_x.get("loan_interest", 0) or 0) + float(group_x.get("other_interest", 0) or 0) + bc_penalties + loan_penalties - float(group_expense_total or 0)
         else:
-            group_profit_income = float(group_x.get("loan_interest", 0) or 0) + bc_penalties + loan_penalties
+            group_profit_income = float(group_x.get("loan_interest", 0) or 0) + float(group_x.get("other_interest", 0) or 0) + bc_penalties + loan_penalties - float(group_expense_total or 0)
         member_profit = round((group_profit_income / active_shares) * member_share_count, 2) if member_id else None
         member_expenses = round((group_expense_total / active_shares) * member_share_count, 2) if member_id else None
         visible_profit = member_profit if member_id else round(group_profit_income, 2)
