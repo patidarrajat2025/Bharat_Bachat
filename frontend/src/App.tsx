@@ -435,8 +435,12 @@ function Admin(){const {user}=useStore();const [tab,setTab]=useState((user?.role
     }
     let retryError='';
     if(retryEntries.length){
-      try{await api.monthlyKistBulk(tid,{period:paymentPeriod,entries:retryEntries,account:paymentAccount,date:paymentDate,note:paymentNote});}
-      catch(e:any){retryError=e?.message||'Retry request returned an error.';}
+      // Retry one share at a time. A single transient failure must not prevent
+      // unrelated remaining shares from being reconciled in the same operation.
+      for(const entry of retryEntries){
+        try{await api.monthlyKistBulk(tid,{period:paymentPeriod,entries:[entry],account:paymentAccount,date:paymentDate,note:paymentNote});}
+        catch(e:any){retryError=[retryError,e?.message||'Retry request returned an error.'].filter(Boolean).join(' · ');}
+      }
     }
     let finalStatus=verify;
     if(retryEntries.length){

@@ -115,7 +115,7 @@ export function Layout({children}:{children:ReactNode}){
     <header className="app-header safe-top figma-header">
       <div className="app-header-inner">
         <Link to={user?.role==='super_admin'?'/admin':'/dashboard'} className="header-brand"><Logo compact/><span className="header-app-title">Bharat Bachat</span></Link>
-        <div className="header-context"><span className="header-context-dot"/><span className="header-context-name">{tenant?.name||tr('Group Vault')}</span><span className="header-context-role">{user?.role==='super_admin'?tr('Super Admin'):user?.role==='group_admin'?tr('Group Admin'):tr('Member')}</span></div>
+        
         <div className="header-actions">
           <InstallButton/>
           <LanguageToggle/>
