@@ -161,7 +161,7 @@ function MemberDashboard(){
     <ErrorBox error={err}/>
     <section className="card dashboard-hero-card mt-4">
       <div className="section-head dashboard-vault-head">
-        <div className="dashboard-group-title"><span className="dashboard-group-logo">{tenant?.logo_url?<img src={tenant.logo_url} alt=""/>:<Building2 size={22}/>}</span><div><h2>{tenant?.name||tr('Group Vault')}</h2><p>{tr('Group Vault')}</p></div></div>
+        <div className="dashboard-group-title"><span className="dashboard-group-logo">{tenant?.logo_url?<img src={tenant.logo_url} alt=""/>:<Building2 size={22}/>}</span><div><h2 className="text-white font-semibold">{tenant?.name||tr('Group Vault')}</h2><p>{tr('Group Vault')}</p></div></div>
       </div>
       <div className="segmented-switch mt-3" role="tablist" aria-label={tr('Dashboard view')}>
         <button type="button" className={vaultView==='group'?'active':''} onClick={()=>setVaultView('group')}>{tr('Group Total')}</button>
@@ -253,7 +253,7 @@ function Dashboard(){
   return <>
     <ErrorBox error={err}/>
     <section className="card dashboard-hero-card mt-4">
-      <div className="section-head dashboard-vault-head"><div className="dashboard-group-title">{user?.role==='member'?<span className="dashboard-group-logo">{tenant?.logo_url?<img src={tenant.logo_url} alt=""/>:<Building2 size={22}/>}</span>:<label className={`dashboard-group-logo dashboard-logo-upload ${logoBusy?'is-busy':''}`} title={tr('Change Group Logo')}><input hidden type="file" accept="image/*" disabled={logoBusy} onChange={e=>{const f=e.target.files?.[0];if(f)void uploadLogo(f);e.currentTarget.value=''}}/>{tenant?.logo_url?<img src={tenant.logo_url} alt=""/>:<Building2 size={22}/>}<span className="dashboard-logo-camera">{logoBusy?'…':<Upload size={13}/>}</span></label>}<div><h2>{tenant?.name||tr('Group Vault')}</h2><p>{tr('Group Vault')}</p></div><span className="figma-status-pill status-ontrack">{tr('Active')}</span></div></div>
+      <div className="section-head dashboard-vault-head"><div className="dashboard-group-title">{user?.role==='member'?<span className="dashboard-group-logo">{tenant?.logo_url?<img src={tenant.logo_url} alt=""/>:<Building2 size={22}/>}</span>:<label className={`dashboard-group-logo dashboard-logo-upload ${logoBusy?'is-busy':''}`} title={tr('Change Group Logo')}><input hidden type="file" accept="image/*" disabled={logoBusy} onChange={e=>{const f=e.target.files?.[0];if(f)void uploadLogo(f);e.currentTarget.value=''}}/>{tenant?.logo_url?<img src={tenant.logo_url} alt=""/>:<Building2 size={22}/>}<span className="dashboard-logo-camera">{logoBusy?'…':<Upload size={13}/>}</span></label>}<div><h2 className="text-white font-semibold">{tenant?.name||tr('Group Vault')}</h2><p>{tr('Group Vault')}</p></div><span className="figma-status-pill status-ontrack">{tr('Active')}</span></div></div>
       <div className="segmented-switch mt-3" role="tablist"><button type="button" className={view==='group'?'active':''} onClick={()=>setView('group')}>{tr('Group Total')}</button><button type="button" className={view==='personal'?'active':''} onClick={()=>setView('personal')}>{tr('My Share')}</button></div>
       <VaultMetrics view={view} summary={summary} personal={personal} personalLoans={personalLoans} membersCount={summary?.total_members||summary?.members||0} sharesCount={summary?.total_shares||0} activeShares={summary?.active_shares||0} inactiveShares={summary?.inactive_shares||0} memberProfit={memberProfit} memberSharesCount={summary?.member_active_shares||1}/>
     </section>

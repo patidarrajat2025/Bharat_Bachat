@@ -1340,7 +1340,7 @@ body{background:linear-gradient(145deg,#F1F9F5 0%,#FFFFFF 48%,#EDF7F2 100%)}
 .dashboard-group-title{display:flex;align-items:center;gap:11px;min-width:0}
 .dashboard-group-logo{width:46px;height:46px;border-radius:15px;display:grid;place-items:center;overflow:hidden;background:#e6f4ea;color:#087443;border:1px solid #cce6d7;flex:none}
 .dashboard-group-logo img{width:100%;height:100%;object-fit:cover}
-.dashboard-group-title h2{margin:0;color:var(--bb-reference-navy);font-size:18px;font-weight:950;line-height:1.1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dashboard-group-title h2{margin:0;color:#fff;font-size:18px;font-weight:950;line-height:1.1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .dashboard-group-title p{margin:3px 0 0;color:#70818d;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.06em}
 
 /* Financial semantic colors are shared by every card, role and page. */
@@ -3110,3 +3110,14 @@ button,.btn-primary,.btn-secondary,.input,textarea,select{font-size:15px}
 .modal-head h2{min-width:0;flex:1;}
 .modal-head .icon-btn{flex:0 0 auto;margin-left:auto;}
 .modal-title-inline{display:flex;align-items:center;gap:8px;min-width:0;flex:1}.modal-title-inline h2{min-width:0;overflow-wrap:anywhere}.modal-title-inline svg{flex:0 0 auto;color:#0f9d58}
+
+/* Final alignment fixes: keep the group name readable on the dark vault card
+   and keep modal title/close controls in their own non-overlapping flex slots. */
+.dashboard-hero-card .dashboard-group-title h2{color:#fff!important;font-weight:700;min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dashboard-hero-card .dashboard-group-title>div{min-width:0;flex:1}
+.modal-head{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:16px 18px}
+.modal-title-inline{display:inline-flex;align-items:center;gap:8px;min-width:0;flex:1}
+.modal-title-inline h2{min-width:0;overflow-wrap:anywhere}
+.modal-head>.icon-btn{flex:0 0 auto;margin-left:auto}
+.header-brand{display:flex;align-items:center;flex:1;min-width:0;gap:10px}
+.header-app-title{flex:1;min-width:0;white-space:nowrap;font-weight:700;color:#fff}

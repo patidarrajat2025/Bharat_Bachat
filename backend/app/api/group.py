@@ -912,7 +912,8 @@ async def accounting_view(tenant_id:str, view:str, period:str|None=None, account
             legacy_penalty={"$cond":[{"$and":[{"$eq":["$type","penalty"]},{"$eq":[{"$ifNull":["$loan_penalty_collected",0]},0]},{"$eq":[{"$ifNull":["$bc_regular_kist_penalty",0]},0]}]}, {"$abs":{"$ifNull":["$amount",0]}}, 0]}
             profit_expr={"$add":[profit_expr,legacy_penalty]}
             totals=await db.financial_feed.aggregate([{"$match":feed},{"$group":{"_id":None,"grand":{"$sum":profit_expr},"loan_interest":{"$sum":{"$ifNull":["$loan_interest_collected",0]}},"other_interest":{"$sum":{"$add":[{"$ifNull":["$other_interest_value",0]},{"$cond":[{"$and":[{"$eq":["$type","interest"]},{"$eq":[{"$ifNull":["$other_interest_value",0]},0]}]},{"$abs":{"$ifNull":["$amount",0]}},0]}]}},"loan_penalties":{"$sum":{"$ifNull":["$loan_penalty_collected",0]}},"bc_penalties":{"$sum":{"$add":[{"$ifNull":["$bc_regular_kist_penalty",0]},legacy_penalty]}},"count":{"$sum":1}}}]).to_list(1)
-            a=totals[0] if totals else {}; entries=[]
+            a=totals[0] if totals else {}
+            entries=[]
             for r in rows:
                 li=float(r.get("loan_interest_collected",0) or 0); oi=float(r.get("other_interest_value",0) or 0); lp=float(r.get("loan_penalty_collected",0) or 0); bp=float(r.get("bc_regular_kist_penalty",0) or 0)
                 if r.get("type")=="interest" and not oi: oi=abs(float(r.get("amount",0) or 0))

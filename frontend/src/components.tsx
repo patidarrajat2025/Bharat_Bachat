@@ -98,7 +98,7 @@ export function Layout({children}:{children:ReactNode}){
       : nav.map(x=>x[0]);
   const visible=nav.filter(x=>allowed.includes(x[0]));
   const primary=visible.slice(0,4);
-  const hasMore=user?.role==='group_admin'||visible.length>4;
+  const hasMore=(user?.role as string)==='admin'||user?.role==='group_admin'||visible.length>4;
   const active=visible.find(x=>loc.pathname===x[0] || (x[0] !== '/dashboard' && loc.pathname.startsWith(`${x[0]}/`)));
   useEffect(()=>{setMore(false);setProfile(false)},[loc.pathname]);
   useEffect(()=>{let timer:number|undefined;const h=(e:Event)=>{const d=(e as CustomEvent).detail;window.clearTimeout(timer);setToast({message:String(d?.message||''),type:d?.type==='error'?'error':d?.type==='info'?'info':'success'});timer=window.setTimeout(()=>setToast(null),d?.type==='error'?5000:3200)};window.addEventListener('bb-toast',h);return()=>{window.clearTimeout(timer);window.removeEventListener('bb-toast',h)}},[]);
@@ -221,7 +221,7 @@ export function TextArea({label,...props}:any){
 export function Modal({title,onClose,children}:{title:string;onClose:()=>void;children:ReactNode}){
   const content=<div className="modal-backdrop" role="dialog" aria-modal="true" onMouseDown={e=>{if(e.target===e.currentTarget)onClose()}}>
     <div className={`modal-card ${/Loan|loan|Request|request/.test(title)?'loan-modal':''}`}>
-      <div className="modal-head"><div className="modal-title-inline">{/Monthly Kist Collection|Bulk Monthly Kist/.test(title)&&<Info size={18} aria-hidden="true"/>}<h2>{title}</h2></div><button type="button" className="icon-btn" aria-label={tr("Close")} onClick={onClose}><X size={19}/></button></div>
+      <div className="modal-head flex items-center justify-between gap-3 px-4 py-3"><div className="modal-title-inline flex items-center gap-2">{/Monthly Kist Collection|Bulk Monthly Kist/.test(title)&&<Info size={18} aria-hidden="true"/>}<h2>{title}</h2></div><button type="button" className="icon-btn shrink-0 ml-auto" aria-label={tr("Close")} onClick={onClose}><X size={19}/></button></div>
       <div className="modal-body">{children}</div>
     </div>
   </div>;
