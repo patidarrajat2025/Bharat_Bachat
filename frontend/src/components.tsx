@@ -110,7 +110,7 @@ export function Layout({children}:{children:ReactNode}){
   // The More sheet is a secondary destination list, never a duplicate of the fixed footer tabs.
   const secondary=visible.filter(x=>!primary.some(p=>p[0]===x[0]));
   const active=visible.find(x=>loc.pathname===x[0] || (x[0] !== '/dashboard' && loc.pathname.startsWith(`${x[0]}/`)));
-  useEffect(()=>{setMore(false);setProfile(false)},[loc.pathname]);
+  useEffect(()=>{setMore(false);setProfile(false)},[loc.pathname,loc.search]);
   useEffect(()=>{let timer:number|undefined;const h=(e:Event)=>{const d=(e as CustomEvent).detail;window.clearTimeout(timer);setToast({message:String(d?.message||''),type:d?.type==='error'?'error':d?.type==='info'?'info':'success'});timer=window.setTimeout(()=>setToast(null),d?.type==='error'?5000:3200)};window.addEventListener('bb-toast',h);return()=>{window.clearTimeout(timer);window.removeEventListener('bb-toast',h)}},[]);
   useEffect(()=>{
     if(!profile)return;
@@ -175,7 +175,7 @@ export function Layout({children}:{children:ReactNode}){
         <div className="sheet-handle"/>
         <div className="sheet-head"><div><b>{t('more')}</b><span>{tenant?.name||''}</span></div><button type="button" className="icon-btn" onClick={()=>setMore(false)}><X size={19}/></button></div>
         <div className="more-grid">
-          {secondary.map(([to,label,Icon])=><Link key={to} to={to} className={`more-item ${loc.pathname===to || (to!=='/dashboard' && loc.pathname.startsWith(`${to}/`))?'is-active':''}`}><Icon size={21}/><span>{t(label)}</span></Link>)}<button type="button" className="more-item" onClick={()=>{setMore(false);setSettings(true)}}><Settings size={21}/><span>{tr('Settings')}</span></button>
+          {secondary.map(([to,label,Icon])=><Link key={to} to={to} className={`more-item ${loc.pathname===to || (to!=='/dashboard' && loc.pathname.startsWith(`${to}/`))?'is-active':''}`}><Icon size={21}/><span>{t(label)}</span></Link>)}{['group_admin','admin'].includes(String(user?.role||''))&&<Link to="/admin?tab=settings" className={`more-item ${loc.pathname==='/admin'&&new URLSearchParams(loc.search).get('tab')==='settings'?'is-active':''}`}><Settings size={21}/><span>{tr('Loan & Kist Settings')}</span></Link>}{!['group_admin','admin'].includes(String(user?.role||''))&&<button type="button" className="more-item" onClick={()=>{setMore(false);setSettings(true)}}><Settings size={21}/><span>{tr('Settings')}</span></button>}
         </div>
       </div>
     </div>}

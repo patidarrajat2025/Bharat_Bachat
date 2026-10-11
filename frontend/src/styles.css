@@ -3157,3 +3157,80 @@ button,.btn-primary,.btn-secondary,.input,textarea,select{font-size:15px}
 .admin-operation-card>span:last-child,.admin-operation-card>svg:last-child{display:none}
 .admin-operation-card>div:not(.admin-operation-icon){grid-column:1;text-align:center}
 .more-item{cursor:pointer}
+
+
+/* Payment hub cards: stable 2x2 tiles with icon on top and readable copy below. */
+.collection-hub-cards{grid-template-columns:repeat(2,minmax(0,1fr))!important;align-items:stretch!important;gap:14px!important}
+.collection-hub-cards .admin-operation-card{box-sizing:border-box!important;display:flex!important;flex-direction:column!important;align-items:center!important;justify-content:flex-start!important;gap:10px!important;min-width:0!important;min-height:156px!important;height:100%!important;padding:18px 12px!important;text-align:center!important;white-space:normal!important;overflow:hidden!important}
+.collection-hub-cards .admin-operation-icon{display:grid!important;flex:0 0 52px!important;width:52px!important;height:52px!important;min-width:52px!important;border-radius:16px!important;place-items:center!important;margin:0 auto!important}
+.collection-hub-cards .admin-operation-card>div:not(.admin-operation-icon){display:block!important;width:100%!important;min-width:0!important;grid-column:auto!important;text-align:center!important;overflow-wrap:anywhere!important}
+.collection-hub-cards .admin-operation-card strong{display:block!important;font-size:14px!important;line-height:1.3!important;font-weight:800!important;overflow-wrap:anywhere!important}
+.collection-hub-cards .admin-operation-card small{display:block!important;margin-top:5px!important;font-size:11px!important;line-height:1.35!important;overflow-wrap:anywhere!important}
+.collection-hub-cards .admin-operation-card>svg:last-child,.collection-hub-cards .admin-operation-card>span:last-child{display:none!important}
+@media(max-width:640px){.collection-hub-cards{grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:10px!important}.collection-hub-cards .admin-operation-card{min-height:146px!important;padding:14px 9px!important;gap:9px!important;border-radius:17px!important}.collection-hub-cards .admin-operation-icon{flex-basis:44px!important;width:44px!important;height:44px!important;min-width:44px!important;border-radius:14px!important}.collection-hub-cards .admin-operation-icon svg{width:21px!important;height:21px!important}.collection-hub-cards .admin-operation-card strong{font-size:13px!important;line-height:1.28!important}.collection-hub-cards .admin-operation-card small{font-size:10.5px!important;line-height:1.3!important}}
+
+/* Final mobile payment hub layout: prevent narrow-screen card collisions. */
+.app-shell[data-route="/admin"] .collection-hub-cards {
+  display:grid!important;
+  grid-template-columns:repeat(2,minmax(0,1fr))!important;
+  align-items:stretch!important;
+  width:100%!important;
+  min-width:0!important;
+  gap:10px!important;
+}
+.app-shell[data-route="/admin"] .collection-hub-cards > .admin-operation-card {
+  display:flex!important;
+  flex-direction:column!important;
+  align-items:center!important;
+  justify-content:flex-start!important;
+  box-sizing:border-box!important;
+  width:100%!important;
+  min-width:0!important;
+  min-height:142px!important;
+  height:auto!important;
+  padding:12px 8px!important;
+  gap:8px!important;
+  overflow:hidden!important;
+  white-space:normal!important;
+  text-align:center!important;
+}
+.app-shell[data-route="/admin"] .collection-hub-cards > .admin-operation-card > .admin-operation-icon {
+  display:grid!important;
+  flex:0 0 42px!important;
+  width:42px!important;
+  min-width:42px!important;
+  height:42px!important;
+  margin:0 auto!important;
+  place-items:center!important;
+}
+.app-shell[data-route="/admin"] .collection-hub-cards > .admin-operation-card > div:not(.admin-operation-icon) {
+  display:block!important;
+  flex:1 1 auto!important;
+  width:100%!important;
+  min-width:0!important;
+  margin:0!important;
+  text-align:center!important;
+  overflow-wrap:anywhere!important;
+  word-break:normal!important;
+}
+.app-shell[data-route="/admin"] .collection-hub-cards > .admin-operation-card strong {
+  display:block!important;
+  margin:0!important;
+  font-size:12.5px!important;
+  line-height:1.25!important;
+  font-weight:800!important;
+  overflow-wrap:anywhere!important;
+}
+.app-shell[data-route="/admin"] .collection-hub-cards > .admin-operation-card small {
+  display:block!important;
+  margin-top:4px!important;
+  font-size:10px!important;
+  line-height:1.3!important;
+  overflow-wrap:anywhere!important;
+}
+@media(max-width:360px){
+  .app-shell[data-route="/admin"] .collection-hub-cards{gap:8px!important}
+  .app-shell[data-route="/admin"] .collection-hub-cards > .admin-operation-card{min-height:136px!important;padding:10px 6px!important}
+  .app-shell[data-route="/admin"] .collection-hub-cards > .admin-operation-card strong{font-size:12px!important}
+  .app-shell[data-route="/admin"] .collection-hub-cards > .admin-operation-card small{font-size:9.5px!important}
+}
