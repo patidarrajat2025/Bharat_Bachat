@@ -227,11 +227,17 @@ async def summary(tenant_id:str,user=Depends(current_user)):
     return await tenant_summary(tenant_id, member_id or None)
 
 @router.get("/{tenant_id}/analytics")
-async def get_analytics(tenant_id:str,months:int=12,share_no:int|None=None,member_id:str|None=None,user=Depends(current_user)):
+async def get_analytics(tenant_id:str,months:int=12,share_no:int|None=None,member_id:str|None=None,scope:str="personal",user=Depends(current_user)):
     await tenant_guard(user,tenant_id)
+    # Group-admin accounts are also linked to member records. Only apply that
+    # member scope when the caller explicitly requests My Share; Group Total
+    # must stay tenant-wide. Members are always restricted to their own data.
     if user["role"]=="member":
         member_id=str(user.get("member_id") or "")
-    elif user["role"]=="group_admin":
+    elif user["role"]=="group_admin" and scope == "group":
+        member_id=None
+        share_no=None
+    elif user["role"]=="group_admin" and scope != "group":
         # A group admin is also represented by a member/share record. Resolve it
         # server-side so My Share profit works even with an older login session
         # whose JWT/user payload did not yet contain member_id.
@@ -1161,8 +1167,9 @@ async def accounting_view(tenant_id:str, view:str, period:str|None=None, account
         raise HTTPException(403,"Accounting access denied")
     if user.get("role")=="member" and view not in allowed:
         raise HTTPException(403,"Accounting access denied")
-    if user.get("role")=="member" and view in {"expenses","outflows","closing","register","active-loans"}:
-        raise HTTPException(403,"This group-wide accounting view is available to group administrators only")
+    # Members may open read-only dashboard drill-downs for group summary cards.
+    # Mutation endpoints remain role-protected separately; this endpoint only
+    # returns audited accounting read models scoped to the authenticated tenant.
     if view not in allowed: raise HTTPException(404,"Accounting view not found")
     db=get_db()
     tenant=await db.tenants.find_one({"_id":parse_oid(tenant_id)})
@@ -2089,7 +2096,7 @@ async def decide_loan_request(tenant_id:str,request_id:str,body:LoanRequestDecis
             await db.loan_requests.update_one({"_id":req["_id"],"tenant_id":tenant_id},{"$set":{"status":"pending","approval_records":approvals,"loan_approval_records":approvals,"last_approved_at":datetime.now(timezone.utc)}})
             await audit(tenant_id,user,"LOAN_REQUEST_APPROVAL_RECORDED","loan_request",request_id,{"approval_count":len(approvals),"required":required})
             return {"ok":True,"status":"pending","approval_count":len(approvals),"required_admin_approvals":required}
-        principal=body.principal or req["amount"]; rate=body.interest_rate if body.interest_rate is not None else float(tenant.get("loan_interest_rate_per_month",2) or 0); months=body.months or 2
+        principal=body.principal or req["amount"]; rate=body.interest_rate if body.interest_rate is not None else float(tenant.get("loan_interest_rate_per_month",2) or 0); months=body.months or int(req.get("months",2) or 2)
         apply_value=req.get("loan_apply_date") or req.get("created_at") or datetime.now(timezone.utc); apply_date=apply_value.date() if hasattr(apply_value,"date") else datetime.now(timezone.utc).date()
         start_value=req.get("requested_start_date") or req.get("loan_apply_date") or datetime.now(timezone.utc); requested_start=start_value.date() if hasattr(start_value,"date") else datetime.now(timezone.utc).date()
         min_months=max(0,int(tenant.get("min_advance_apply_months",2) or 2))

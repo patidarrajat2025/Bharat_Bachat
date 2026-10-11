@@ -140,7 +140,7 @@ export const api={
  adminOverview:(id:string)=>request<any>(`/group/${id}/admin-overview`),
  summary:(id:string,memberId?:string)=>request<any>(`/group/${id}/summary${memberId?`?member_id=${encodeURIComponent(memberId)}`:''}`),
  tenant:(id:string)=>request<Tenant>(`/group/${id}`),
- analytics:(id:string,months?:number,shareNo?:number,memberId?:string)=>{const q=new URLSearchParams();if(months!==undefined)q.set('months',String(months));if(shareNo!==undefined)q.set('share_no',String(shareNo));if(memberId)q.set('member_id',memberId);const qs=q.toString();return request<any[]>(`/group/${id}/analytics${qs?`?${qs}`:''}`)},
+ analytics:(id:string,months?:number,shareNo?:number,memberId?:string,scope?:'group'|'personal')=>{const q=new URLSearchParams();if(months!==undefined)q.set('months',String(months));if(shareNo!==undefined)q.set('share_no',String(shareNo));if(memberId)q.set('member_id',memberId);if(scope)q.set('scope',scope);const qs=q.toString();return request<any[]>(`/group/${id}/analytics${qs?`?${qs}`:''}`)},
  members:(id:string)=>request<Member[]>(`/group/${id}/members`),
  membersPage:(id:string,page=1,pageSize=10,search='',status='all')=>{const q=new URLSearchParams({page:String(page),page_size:String(pageSize)});if(search.trim())q.set('search',search.trim());if(status&&status!=='all')q.set('status',status);return request<any>(`/group/${id}/members?${q.toString()}`)},
  memberShares:(tid:string,mid:string)=>request<import('./types').Share[]>(`/group/${tid}/members/${mid}/shares`),

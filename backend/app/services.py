@@ -323,7 +323,12 @@ async def analytics(tenant_id: str, months: int = 12, share_no: int | None = Non
     member_share_count_task = db.shares.count_documents(share_query) if member_id else asyncio.sleep(0, result=0)
     active_shares_task = db.shares.count_documents({"tenant_id": tenant_id, "status": "active"})
 
-    base_match = {"tenant_id": tenant_id, "date": {"$gte": start, "$lt": end}}
+    effective_date_range = {"$or": [
+        {"date": {"$gte": start, "$lt": end}},
+        {"date": {"$exists": False}, "created_at": {"$gte": start, "$lt": end}},
+        {"date": None, "created_at": {"$gte": start, "$lt": end}},
+    ]}
+    base_match = {"tenant_id": tenant_id, **effective_date_range}
     personal_match = {**base_match, "member_id": member_id} if member_id else None
     if share_no is not None:
         # In personal mode, share_no is scoped to the caller's own shares; the
@@ -337,7 +342,7 @@ async def analytics(tenant_id: str, months: int = 12, share_no: int | None = Non
         return [
             {"$match": match},
             {"$project": {
-                "date": 1, "type": 1, "original_type": 1, "payment_category": 1, "penalty_category": 1,
+                "date": {"$ifNull": ["$date", "$created_at"]}, "type": 1, "original_type": 1, "payment_category": 1, "penalty_category": 1,
                 "amount": _mongo_amount_rupees_expr(),
                 "interest_value": {"$convert": {"input": {"$ifNull": ["$interest", 0]}, "to": "double", "onError": 0, "onNull": 0}},
                 "bc_penalty_value": {"$convert": {"input": {"$ifNull": ["$bc_regular_kist_penalty", 0]}, "to": "double", "onError": 0, "onNull": 0}},
@@ -375,8 +380,8 @@ async def analytics(tenant_id: str, months: int = 12, share_no: int | None = Non
     group_tx_task = db.transactions.aggregate(transaction_pipeline(base_match)).to_list(None)
     personal_tx_task = db.transactions.aggregate(transaction_pipeline(personal_match)).to_list(None) if personal_match else asyncio.sleep(0, result=[])
     exp_task = db.expenses.aggregate([
-        {"$match": {"tenant_id": tenant_id, "date": {"$gte": start, "$lt": end}}},
-        {"$project": {"date": 1, "amount": _mongo_amount_rupees_expr()}},
+        {"$match": {"tenant_id": tenant_id, **effective_date_range}},
+        {"$project": {"date": {"$ifNull": ["$date", "$created_at"]}, "amount": _mongo_amount_rupees_expr()}},
         {"$group": {"_id": {"month": {"$dateToString": {"format": "%Y-%m", "date": "$date", "timezone": "UTC"}}}, "expenses": {"$sum": "$amount"}}},
     ]).to_list(None)
 
@@ -400,30 +405,26 @@ async def analytics(tenant_id: str, months: int = 12, share_no: int | None = Non
         # but cannot override the financial report's income classification.
         canonical_month = canonical_profit.get("monthly", {}).get(key, {})
         canonical_parts = canonical_month
-        if not member_id:
-            group_expense_total = int(canonical_month.get("expenses_minor", 0) or 0) / 100
-            interest_income = int(canonical_parts.get("bank_interest", 0) or 0) / 100
-            other_interest_income = int(canonical_parts.get("other_interest", 0) or 0) / 100
-            loan_interest_income = int(canonical_parts.get("loan_interest", 0) or 0) / 100
-            bc_penalties = int(canonical_parts.get("bc_penalties", 0) or 0) / 100
-            loan_penalties = int(canonical_parts.get("loan_penalties", 0) or 0) / 100
-            other_penalties = int(canonical_parts.get("other_penalties", 0) or 0) / 100
-            other_income = int(canonical_parts.get("other_income", 0) or 0) / 100
-        else:
-            interest_income = float(x.get("interest", 0) or 0)
-            other_interest_income = float(x.get("other_interest", 0) or 0)
-            loan_interest_income = float(x.get("loan_interest", 0) or 0)
-            bc_penalties = float(group_x.get("bc_penalties", 0) or 0)
-            loan_penalties = float(group_x.get("loan_penalties", 0) or 0)
-            other_penalties = float(group_x.get("other_penalties", 0) or 0)
-            other_income = float(x.get("other_income", 0) or 0)
+        group_expense_total = int(canonical_month.get("expenses_minor", 0) or 0) / 100
+        # Income categories are allocated with the same active-share denominator
+        # as dashboard profit. A linked member receives all of their active shares;
+        # an admin viewing one share receives one share's allocation.
+        allocation_factor = (member_share_count / active_shares) if member_id else (1 / active_shares if share_no is not None else 1)
+        interest_income = int(canonical_parts.get("bank_interest", 0) or 0) / 100 * allocation_factor
+        other_interest_income = int(canonical_parts.get("other_interest", 0) or 0) / 100 * allocation_factor
+        loan_interest_income = int(canonical_parts.get("loan_interest", 0) or 0) / 100 * allocation_factor
+        bc_penalties = int(canonical_parts.get("bc_penalties", 0) or 0) / 100 * allocation_factor
+        loan_penalties = int(canonical_parts.get("loan_penalties", 0) or 0) / 100 * allocation_factor
+        other_penalties = int(canonical_parts.get("other_penalties", 0) or 0) / 100 * allocation_factor
+        other_income = int(canonical_parts.get("other_income", 0) or 0) / 100 * allocation_factor
         # Profit allocation uses group income internally, but personal mode only
         # returns the caller's share rather than the full group profit.
         group_profit_income = int(canonical_month.get("profit_minor", 0) or 0) / 100
         member_profit = float(from_minor(allocate_minor(int(canonical_month.get("profit_minor", 0) or 0), member_share_count, active_shares))) if member_id else None
         member_expenses = round((group_expense_total / active_shares) * member_share_count, 2) if member_id else None
-        visible_profit = member_profit if member_id else round(group_profit_income, 2)
-        visible_expenses = member_expenses if member_id else round(group_expense_total, 2)
+        per_share_view = bool(share_no is not None and not member_id)
+        visible_profit = member_profit if member_id else round(group_profit_income / active_shares, 2) if per_share_view else round(group_profit_income, 2)
+        visible_expenses = member_expenses if member_id else round(group_expense_total / active_shares, 2) if per_share_view else round(group_expense_total, 2)
         visible_per_share = round((member_profit / max(1, member_share_count)), 2) if member_id else round(group_profit_income / active_shares, 2)
         rows.append({
             "month": start_month.strftime("%b %y"), "year": start_month.year, "month_key": key,

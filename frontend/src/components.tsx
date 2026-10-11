@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { Link, useLocation } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { useTranslation } from 'react-i18next';
-import { BarChart3, BookOpen, ChevronDown, CreditCard, FileText, Home, LogOut, MoreHorizontal, Receipt, ShieldCheck, Smartphone, UserCircle, Users, WalletCards, X, Bell, Settings, Sun, Moon, Palette, Check, ArrowDownToLine, ArrowUpFromLine, Info } from 'lucide-react';
+import { ArrowLeft, BarChart3, BookOpen, ChevronDown, CreditCard, FileText, Home, LogOut, MoreHorizontal, Receipt, ShieldCheck, Smartphone, UserCircle, Users, WalletCards, X, Bell, Settings, Sun, Moon, Palette, Check, ArrowDownToLine, ArrowUpFromLine, Info } from 'lucide-react';
 import { useStore } from './store';
 import { tr, trError, trDynamic, appLocale } from './i18n';
 import { api } from './api';
@@ -103,8 +103,12 @@ export function Layout({children}:{children:ReactNode}){
   const isGroupAdmin=['group_admin','admin'].includes(String(user?.role||''));
   const primary=isGroupAdmin
     ? visible.filter(x=>adminPrimaryPaths.includes(x[0])).sort((a,b)=>adminPrimaryPaths.indexOf(a[0])-adminPrimaryPaths.indexOf(b[0]))
-    : visible.slice(0,4);
-  const hasMore=isGroupAdmin||visible.length>4;
+    : user?.role==='member'
+      ? visible.filter(x=>['/dashboard','/analytics','/passbook'].includes(x[0]))
+      : visible.slice(0,4);
+  const hasMore=true;
+  // The More sheet is a secondary destination list, never a duplicate of the fixed footer tabs.
+  const secondary=visible.filter(x=>!primary.some(p=>p[0]===x[0]));
   const active=visible.find(x=>loc.pathname===x[0] || (x[0] !== '/dashboard' && loc.pathname.startsWith(`${x[0]}/`)));
   useEffect(()=>{setMore(false);setProfile(false)},[loc.pathname]);
   useEffect(()=>{let timer:number|undefined;const h=(e:Event)=>{const d=(e as CustomEvent).detail;window.clearTimeout(timer);setToast({message:String(d?.message||''),type:d?.type==='error'?'error':d?.type==='info'?'info':'success'});timer=window.setTimeout(()=>setToast(null),d?.type==='error'?5000:3200)};window.addEventListener('bb-toast',h);return()=>{window.clearTimeout(timer);window.removeEventListener('bb-toast',h)}},[]);
@@ -171,7 +175,7 @@ export function Layout({children}:{children:ReactNode}){
         <div className="sheet-handle"/>
         <div className="sheet-head"><div><b>{t('more')}</b><span>{tenant?.name||''}</span></div><button type="button" className="icon-btn" onClick={()=>setMore(false)}><X size={19}/></button></div>
         <div className="more-grid">
-          {visible.map(([to,label,Icon])=><Link key={to} to={to} className={`more-item ${loc.pathname===to || (to!=='/dashboard' && loc.pathname.startsWith(`${to}/`))?'is-active':''}`}><Icon size={21}/><span>{t(label)}</span></Link>)}
+          {secondary.map(([to,label,Icon])=><Link key={to} to={to} className={`more-item ${loc.pathname===to || (to!=='/dashboard' && loc.pathname.startsWith(`${to}/`))?'is-active':''}`}><Icon size={21}/><span>{t(label)}</span></Link>)}<button type="button" className="more-item" onClick={()=>{setMore(false);setSettings(true)}}><Settings size={21}/><span>{tr('Settings')}</span></button>
         </div>
       </div>
     </div>}
@@ -226,8 +230,8 @@ export function TextArea({label,...props}:any){
 
 export function Modal({title,onClose,children}:{title:string;onClose:()=>void;children:ReactNode}){
   const content=<div className="modal-backdrop" role="dialog" aria-modal="true" onMouseDown={e=>{if(e.target===e.currentTarget)onClose()}}>
-    <div className={`modal-card ${/Loan|loan|Request|request/.test(title)?'loan-modal':''}`}>
-      <div className="modal-head flex items-center justify-between gap-3 px-4 py-3"><div className="modal-title-inline flex items-center gap-2">{/Monthly Kist Collection|Bulk Monthly Kist/.test(title)&&<Info size={18} aria-hidden="true"/>}<h2>{title}</h2></div><button type="button" className="icon-btn shrink-0 ml-auto" aria-label={tr("Close")} onClick={onClose}><X size={19}/></button></div>
+    <div className={`modal-card modal-slide-up ${/Loan|loan|Request|request/.test(title)?'loan-modal':''}`}>
+      <div className="modal-head flex items-center justify-between gap-3 px-4 py-3"><div className="modal-title-inline flex min-w-0 items-center gap-2"><button type="button" className="modal-back-button" onClick={onClose} aria-label={tr("Back")}><ArrowLeft size={17}/><span>{tr("Back")}</span></button>{/Monthly Kist Collection|Bulk Monthly Kist/.test(title)&&<Info size={18} aria-hidden="true"/>}<h2>{title}</h2></div><button type="button" className="icon-btn shrink-0 ml-auto" aria-label={tr("Close")} onClick={onClose}><X size={19}/></button></div>
       <div className="modal-body">{children}</div>
     </div>
   </div>;
