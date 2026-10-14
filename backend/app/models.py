@@ -100,7 +100,7 @@ class MoneyInCreate(BaseModel):
     amount: float = Field(gt=0)
     type: Literal["interest", "penalty"]
     # Penalties are separated for profit calculation.
-    penalty_category: Literal["bc", "loan"] = "bc"
+    penalty_category: Literal["bc", "loan", "other"] = "other"
     account: Account = "cash"
     date: DateType | None = None
     note: str = ""

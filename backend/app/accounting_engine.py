@@ -86,6 +86,17 @@ def assert_idempotent_match(existing: dict, *, tenant_id: str, member_id, typ: s
         if key in extra and str(existing.get(key) or "") != str(extra.get(key) or ""):
             raise ValueError(f"Idempotency key was already used with a different {key}")
 
+
+def financial_feed_source_key(source_type: str, source_id) -> str:
+    """Return the one canonical materialized-feed identity for a source row."""
+    prefix = "tx" if source_type == "transaction" else str(source_type)
+    return f"{prefix}:{source_id}"
+
+
+def bc_penalty_chargeable_days(overdue_days: int, grace_days: int = 10) -> int:
+    """Charge BC late fees only for days beyond the configured grace period."""
+    return max(0, int(overdue_days) - max(0, int(grace_days)))
+
 def _minor_field(row: dict, minor_key: str, rupee_keys: tuple[str, ...] = ()) -> int:
     if row.get(minor_key) is not None:
         try: return int(row[minor_key])
@@ -163,7 +174,13 @@ def profit_components(transaction: dict) -> dict[str, int]:
             "other_interest": max(0, other_interest), "loan_penalties": max(0, loan_penalty),
             "bc_penalties": max(0, bc_penalty), "other_penalties": max(0, other_penalty),
             "other_income": other_income}
-    vals["income_total"] = sum(vals.values())
+    # Strict Bharat Bachat policy: earned profit is ONLY interest + penalties.
+    # Other income remains separately classified for reconciliation but is not
+    # part of group/member profit until the policy explicitly changes.
+    vals["income_total"] = sum(vals[key] for key in (
+        "bank_interest", "loan_interest", "other_interest",
+        "loan_penalties", "bc_penalties", "other_penalties",
+    ))
     if is_reversal:
         vals = {key: -value for key, value in vals.items()}
     return vals
@@ -177,9 +194,11 @@ def net_profit_from_buckets_minor(*, bank_interest=0, loan_interest=0, other_int
                                  loan_penalties=0, bc_penalties=0, other_penalties=0,
                                  other_income=0, expenses=0) -> int:
     """Cumulative earned profit from MongoDB buckets (rupees); expenses are separate cash outflows."""
+    # Keep the argument for API compatibility, but never deduct expenses or
+    # include miscellaneous non-interest income in strict group/member profit.
     income_minor = sum(to_minor(v) for v in (
         bank_interest, loan_interest, other_interest, loan_penalties,
-        bc_penalties, other_penalties, other_income,
+        bc_penalties, other_penalties,
     ))
     # Expenses reduce cash/bank balances and are reported separately; they do not reduce cumulative member profit.
     return income_minor

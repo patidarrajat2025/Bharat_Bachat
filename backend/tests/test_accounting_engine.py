@@ -1,6 +1,6 @@
 import unittest
 from datetime import date
-from app.accounting_engine import to_minor, from_minor, simple_interest_minor, allocate_kist_payment, profit_components, profit_minor, monthly_overdue_penalty_minor, assert_idempotent_match, allocate_minor, net_profit_from_buckets_minor
+from app.accounting_engine import to_minor, from_minor, simple_interest_minor, allocate_kist_payment, profit_components, profit_minor, monthly_overdue_penalty_minor, assert_idempotent_match, allocate_minor, net_profit_from_buckets_minor, financial_feed_source_key, bc_penalty_chargeable_days
 
 class AccountingEngineTests(unittest.TestCase):
     def test_kist_partial_payment_and_bulk_cap_are_exact(self):
@@ -57,13 +57,15 @@ class AccountingEngineTests(unittest.TestCase):
         self.assertEqual(profit_components(reversal)['income_total'], -1200)
         self.assertEqual(profit_minor([original, reversal], []), 0)
 
-    def test_generic_income_is_counted_and_reversal_offsets_it(self):
+    def test_misc_income_is_classified_but_excluded_from_strict_profit(self):
         original = {'type':'misc_income','amount':'75','amount_minor':7500}
         reversal = {'type':'reversal','original_type':'misc_income','reversal_of':'tx-2',
                     'amount':'-75','amount_minor':-7500}
         self.assertEqual(profit_components(original)['other_income'], 7500)
         self.assertEqual(profit_components(reversal)['other_income'], -7500)
+        self.assertEqual(profit_components(original)['income_total'], 0)
         self.assertEqual(profit_minor([original, reversal], []), 0)
+        self.assertEqual(net_profit_from_buckets_minor(other_income=75), 0)
 
     def test_penalty_category_overrides_legacy_misfiled_component(self):
         loan_penalty = profit_components({'type':'penalty','amount':'10','amount_minor':1000,
@@ -78,6 +80,7 @@ class AccountingEngineTests(unittest.TestCase):
     def test_unknown_positive_transaction_is_not_silently_profit(self):
         self.assertEqual(profit_components({'type':'unrecognized_legacy_type','amount':'500'})['income_total'], 0)
         self.assertEqual(profit_components({'type':'misc_income','amount':'5'})['other_income'], 500)
+        self.assertEqual(profit_components({'type':'misc_income','amount':'5'})['income_total'], 0)
 
     def test_legacy_penalty_categories_and_no_double_count(self):
         self.assertEqual(profit_components({'type':'penalty','amount':'3','payment_category':'other'})['other_penalties'], 300)
@@ -94,6 +97,15 @@ class AccountingEngineTests(unittest.TestCase):
     def test_penalty_accrues_per_missed_cycle_and_not_origination_month(self):
         self.assertEqual(monthly_overdue_penalty_minor(date(2026,1,15), date(2026,2,10), 10, 100), 0)
         self.assertEqual(monthly_overdue_penalty_minor(date(2026,1,1), date(2026,3,12), 10, 100), (30+2)*100)
+
+    def test_bc_penalty_has_ten_day_grace_period(self):
+        self.assertEqual(bc_penalty_chargeable_days(10), 0)
+        self.assertEqual(bc_penalty_chargeable_days(11), 1)
+        self.assertEqual(bc_penalty_chargeable_days(15), 5)
+
+    def test_financial_feed_has_one_canonical_key_per_source(self):
+        self.assertEqual(financial_feed_source_key("transaction", "abc123"), "tx:abc123")
+        self.assertEqual(financial_feed_source_key("expense", "abc123"), "expense:abc123")
 
     def test_minor_component_fields_take_precedence_over_float_legacy_fields(self):
         row = {'type':'loan_repayment','amount':110,'amount_minor':11000,

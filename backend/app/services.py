@@ -241,7 +241,9 @@ async def tenant_summary(tenant_id: str, member_id: str | None = None):
     # cash/bank balances only; expenses are reported separately, not deducted from profit.
     profit_income_minor = int(canonical_profit["net_profit_minor"])
     profit_income = profit_income_minor / 100
-    bc_fund = float(tx.get("regular_contributions", 0) or 0) + interest + penalties + loan_interest_income + other_interest_income
+    # Keep BC principal collections independent from earned profit. Expenses are
+    # charged to the collected group contribution pool, never to profit.
+    bc_fund = float(tx.get("regular_contributions", 0) or 0) - exp_total
 
     cash = opening_cash + float(tx.get("cash_inflow", 0) or 0) - float(tx.get("cash_outflow_tx", 0) or 0) - float(exp.get("cash", 0) or 0)
     bank = opening_bank + float(tx.get("bank_inflow", 0) or 0) - float(tx.get("bank_outflow_tx", 0) or 0) - float(exp.get("bank", 0) or 0)

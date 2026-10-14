@@ -7,7 +7,7 @@ from ..db import get_db, backfill_financial_feed
 from ..deps import current_user, tenant_guard, require_roles, parse_oid
 from ..models import *
 from ..services import tenant_summary, analytics
-from ..accounting_engine import monthly_overdue_penalty_minor, to_minor, from_minor, simple_interest_minor, allocate_kist_payment, profit_components, net_profit_from_buckets_minor, assert_idempotent_match, allocate_minor
+from ..accounting_engine import monthly_overdue_penalty_minor, to_minor, from_minor, simple_interest_minor, allocate_kist_payment, profit_components, net_profit_from_buckets_minor, assert_idempotent_match, allocate_minor, financial_feed_source_key, bc_penalty_chargeable_days
 from ..journal import build_journal, build_expense_journal, reverse_journal
 from ..audit import audit
 from ..core.config import settings
@@ -37,6 +37,43 @@ def _mongo_amount_minor_expr(minor_field: str = "amount_minor", amount_field: st
     return {"$convert": {"input": {"$ifNull": [f"${minor_field}", legacy_minor]}, "to": "long", "onError": 0, "onNull": 0}}
 
 
+async def _normalize_legacy_transaction_feed_keys(tenant_id: str):
+    """Converge legacy transaction:<id> feed aliases onto the canonical tx:<id> key.
+
+    The source transaction collection is authoritative. If both aliases exist,
+    discard only the duplicate materialized-feed row; otherwise rename the alias.
+    Source transactions and accounting history are never modified by this repair.
+    """
+    db = get_db()
+    cursor = db.financial_feed.find(
+        {"tenant_id": tenant_id, "source_type": "transaction", "source_key": {"$regex": r"^transaction:"}},
+        {"_id": 1, "source_id": 1, "source_key": 1},
+    )
+    async for row in cursor:
+        source_id = str(row.get("source_id") or str(row.get("source_key", "")).split(":", 1)[-1])
+        canonical = financial_feed_source_key("transaction", source_id)
+        existing = await db.financial_feed.find_one(
+            {"tenant_id": tenant_id, "source_key": canonical}, {"_id": 1}
+        )
+        if existing:
+            await db.financial_feed.delete_one({"_id": row["_id"], "tenant_id": tenant_id})
+        else:
+            try:
+                await db.financial_feed.update_one(
+                    {"_id": row["_id"], "tenant_id": tenant_id},
+                    {"$set": {"source_key": canonical}},
+                )
+            except Exception:
+                # Another app instance may have inserted the canonical key after
+                # our lookup. Only suppress the race if that exact key now exists.
+                raced = await db.financial_feed.find_one(
+                    {"tenant_id": tenant_id, "source_key": canonical}, {"_id": 1}
+                )
+                if not raced:
+                    raise
+                await db.financial_feed.delete_one({"_id": row["_id"], "tenant_id": tenant_id})
+
+
 async def ensure_financial_feed_ready(tenant_id: str):
     """Repair the accounting read model when source counts OR stored totals drift.
 
@@ -45,6 +82,10 @@ async def ensure_financial_feed_ready(tenant_id: str):
     source bucket independently and its signed total before trusting the feed.
     """
     db=get_db()
+    # Older live writes used transaction:<id> while backfill uses tx:<id>.
+    # Normalize that alias before comparing source/feed counts to avoid making a
+    # second materialized row for the same source transaction during repair.
+    await _normalize_legacy_transaction_feed_keys(tenant_id)
     # Normalize already-materialized legacy rows whose account was missing,
     # null or blank. Otherwise an account=cash query misses records even when
     # account-wise totals appear to match during reconciliation.
@@ -636,7 +677,8 @@ async def _post_bc_penalty_once(tenant_id:str,member_id:str,period:str,payment_d
     db=get_db(); tenant=await group_settings(tenant_id)
     due_day=int(tenant.get("bc_due_date",10) or 10); per_day=float(tenant.get("bc_per_day_penalty",0) or 0)
     y,m=map(int,period.split("-")); overdue=_due_overdue_days(payment_dt,due_day,y,m)
-    amount_minor=overdue*to_minor(per_day); amount=float(from_minor(amount_minor))
+    chargeable_days=bc_penalty_chargeable_days(overdue, 10)  # 10-day grace period; charge from day 11 onward.
+    amount_minor=chargeable_days*to_minor(per_day); amount=float(from_minor(amount_minor))
     if amount_minor<=0: return None
     key=f"bc:{tenant_id}:{member_id}:{period}"
     existing=await db.transactions.find_one({"tenant_id":tenant_id,"bc_penalty_key":key})
@@ -644,7 +686,7 @@ async def _post_bc_penalty_once(tenant_id:str,member_id:str,period:str,payment_d
         await _finalize_tx_side_effects(existing,user)
         return str(existing["_id"])
     try:
-        return await insert_tx(tenant_id,member_id,"penalty",amount,account,user,date=payment_dt,note=note or f"BC Kist late penalty: {overdue} overdue day(s)",payment_category="bc",penalty_category="bc",bc_regular_kist_penalty=amount,overdue_days=overdue,per_day_penalty=per_day,period=period,bc_penalty_key=key)
+        return await insert_tx(tenant_id,member_id,"penalty",amount,account,user,date=payment_dt,note=note or f"BC Kist late penalty: {chargeable_days} chargeable overdue day(s) after 10-day grace period",payment_category="bc",penalty_category="bc",bc_regular_kist_penalty=amount,overdue_days=overdue,chargeable_overdue_days=chargeable_days,grace_days=10,per_day_penalty=per_day,period=period,bc_penalty_key=key)
     except Exception:
         # A concurrent collector may have inserted the unique period penalty
         # between the lookup and insert. Reuse it and finish any pending effects.
@@ -659,7 +701,7 @@ async def _feed_upsert(doc, *, source_type="transaction"):
     source_minor=int(doc["amount_minor"]) if doc.get("amount_minor") is not None else to_minor(raw_amount)
     amount_minor=-abs(source_minor) if source_type=="expense" else source_minor
     amount=float(from_minor(amount_minor))
-    feed={"source_key":f"{source_type}:{doc.get('_id')}","source_type":source_type,"source_id":str(doc.get("_id")),"transaction_ref":doc.get("transaction_ref"),"tenant_id":doc.get("tenant_id"),"member_id":str(doc.get("member_id")) if doc.get("member_id") else None,"type":doc.get("type","transaction"),"amount":amount,"amount_minor":amount_minor,"account":doc.get("account","cash"),"date":doc.get("date") or doc.get("created_at"),"created_at":doc.get("created_at") or doc.get("date"),"note":doc.get("note","") or "","payment_category":doc.get("payment_category"),"penalty_category":doc.get("penalty_category"),"original_type":doc.get("original_type"),"reversal_of":doc.get("reversal_of"),"period":doc.get("period"),"status":doc.get("status"),"loan_id":str(doc.get("loan_id")) if doc.get("loan_id") else None,"loan_interest_collected":float(doc.get("loan_interest_collected",doc.get("interest",0)) or 0),"loan_interest_minor":doc.get("loan_interest_minor"),"loan_penalty_collected":float(doc.get("loan_penalty_collected",0) or 0),"loan_penalty_minor":doc.get("loan_penalty_minor"),"bc_regular_kist_penalty":float(doc.get("bc_regular_kist_penalty",0) or 0),"bc_penalty_minor":doc.get("bc_penalty_minor"),"other_interest_value":float(doc.get("other_interest",doc.get("other_interest_value",0)) or 0),"other_interest_minor":doc.get("other_interest_minor"),"other_penalty_value":float(doc.get("other_penalty",doc.get("other_penalty_value",0)) or 0),"other_penalty_minor":doc.get("other_penalty_minor"),"interest":float(doc.get("interest",0) or 0),"interest_minor":doc.get("interest_minor"),"principal":float(doc.get("principal",0) or 0),"principal_minor":doc.get("principal_minor"),"share_no":doc.get("share_no"),"share_id":str(doc.get("share_id")) if doc.get("share_id") else None,"expense_id":str(doc.get("expense_id")) if doc.get("expense_id") else None,"category":doc.get("category") if source_type=="expense" else None}
+    feed={"source_key":financial_feed_source_key(source_type, doc.get('_id')),"source_type":source_type,"source_id":str(doc.get("_id")),"transaction_ref":doc.get("transaction_ref"),"tenant_id":doc.get("tenant_id"),"member_id":str(doc.get("member_id")) if doc.get("member_id") else None,"type":doc.get("type","transaction"),"amount":amount,"amount_minor":amount_minor,"account":doc.get("account","cash"),"date":doc.get("date") or doc.get("created_at"),"created_at":doc.get("created_at") or doc.get("date"),"note":doc.get("note","") or "","payment_category":doc.get("payment_category"),"penalty_category":doc.get("penalty_category"),"original_type":doc.get("original_type"),"reversal_of":doc.get("reversal_of"),"period":doc.get("period"),"status":doc.get("status"),"loan_id":str(doc.get("loan_id")) if doc.get("loan_id") else None,"loan_interest_collected":float(doc.get("loan_interest_collected",doc.get("interest",0)) or 0),"loan_interest_minor":doc.get("loan_interest_minor"),"loan_penalty_collected":float(doc.get("loan_penalty_collected",0) or 0),"loan_penalty_minor":doc.get("loan_penalty_minor"),"bc_regular_kist_penalty":float(doc.get("bc_regular_kist_penalty",0) or 0),"bc_penalty_minor":doc.get("bc_penalty_minor"),"other_interest_value":float(doc.get("other_interest",doc.get("other_interest_value",0)) or 0),"other_interest_minor":doc.get("other_interest_minor"),"other_penalty_value":float(doc.get("other_penalty",doc.get("other_penalty_value",0)) or 0),"other_penalty_minor":doc.get("other_penalty_minor"),"interest":float(doc.get("interest",0) or 0),"interest_minor":doc.get("interest_minor"),"principal":float(doc.get("principal",0) or 0),"principal_minor":doc.get("principal_minor"),"share_no":doc.get("share_no"),"share_id":str(doc.get("share_id")) if doc.get("share_id") else None,"expense_id":str(doc.get("expense_id")) if doc.get("expense_id") else None,"category":doc.get("category") if source_type=="expense" else None}
     # MongoDB rejects the same path in $set and $setOnInsert. created_at is
     # immutable after insertion, so keep it out of $set exactly as in backfill.
     created_at=feed.pop("created_at",None)
@@ -1001,6 +1043,11 @@ async def monthly_kist_bulk(tenant_id: str, body: BulkMonthlyKistCreate, user=De
     await tenant_guard(user, tenant_id); db=get_db()
     tenant=await db.tenants.find_one({"_id":parse_oid(tenant_id)})
     if not tenant: raise HTTPException(404,"Group not found")
+    try:
+        period_year, period_month = map(int, body.period.split("-"))
+        if period_year < 1 or not 1 <= period_month <= 12: raise ValueError
+    except (ValueError, TypeError):
+        raise HTTPException(400, "Period must be a valid month in YYYY-MM format")
     expected_minor=to_minor(tenant.get("kist_per_share",500)); expected=float(from_minor(expected_minor)); dt=datetime.combine(body.date or date.today(),datetime.min.time(),tzinfo=timezone.utc)
     total_minor=0; results=[]; seen=set(); paid_members=set()
     for entry in body.entries:
@@ -1050,6 +1097,11 @@ async def monthly_kist(tenant_id:str,body:MonthlyKistCreate,user=Depends(admin_u
     member=await get_member(db,tenant_id,body.member_id)
     tenant=await db.tenants.find_one({"_id":parse_oid(tenant_id)})
     if not tenant: raise HTTPException(404,"Group not found")
+    try:
+        period_year, period_month = map(int, body.period.split("-"))
+        if period_year < 1 or not 1 <= period_month <= 12: raise ValueError
+    except (ValueError, TypeError):
+        raise HTTPException(400, "Period must be a valid month in YYYY-MM format")
     shares=await ensure_member_shares(member); share_map={str(x["_id"]):x for x in shares}
     if len({a.share_id for a in body.allocations})!=len(body.allocations): raise HTTPException(400,"Duplicate share selected")
     dt=datetime.combine(body.date or date.today(),datetime.min.time(),tzinfo=timezone.utc)
@@ -1082,7 +1134,7 @@ async def monthly_kist(tenant_id:str,body:MonthlyKistCreate,user=Depends(admin_u
             after_minor=allocation_result["cumulative_minor"]; status=allocation_result["status"]
             posted_amount=float(from_minor(allocation_result["posted_minor"])); after=float(from_minor(after_minor))
             txid=await insert_tx(tenant_id,body.member_id,"contribution",posted_amount,body.account,user,share_id=allocation.share_id,share_no=int(share["share_no"]),payment_category="monthly_kist",period=body.period,expected_amount=expected,paid_amount=after,status=status,date=dt,note=body.note,idempotency_key=share_idem)
-            total_minor+=allocation_minor
+            total_minor+=allocation_result["posted_minor"]
             results.append({"id":txid,"share_id":allocation.share_id,"share_no":int(share["share_no"]),"paid_amount":posted_amount,"cumulative_paid":after,"expected_amount":expected,"status":status})
         finally:
             await release_operation_lock(lock_key)
