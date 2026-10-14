@@ -1,6 +1,6 @@
 import unittest
 from datetime import date
-from app.accounting_engine import to_minor, from_minor, simple_interest_minor, allocate_kist_payment, profit_components, profit_minor, monthly_overdue_penalty_minor, assert_idempotent_match, allocate_minor
+from app.accounting_engine import to_minor, from_minor, simple_interest_minor, allocate_kist_payment, profit_components, profit_minor, monthly_overdue_penalty_minor, assert_idempotent_match, allocate_minor, net_profit_from_buckets_minor
 
 class AccountingEngineTests(unittest.TestCase):
     def test_kist_partial_payment_and_bulk_cap_are_exact(self):
@@ -31,7 +31,12 @@ class AccountingEngineTests(unittest.TestCase):
             {'type':'contribution','amount':'500'},
             {'type':'loan_disbursement','amount':'-1000'},
         ]
-        self.assertEqual(profit_minor(rows, [{'amount':'10'}]), 11500)
+        self.assertEqual(profit_minor(rows, [{'amount':'10'}]), 12500)  # operating expenses do not reduce cumulative profit
+
+    def test_expenses_do_not_reduce_cumulative_profit(self):
+        income = profit_minor([{'type':'interest','account':'cash','amount':'25','amount_minor':2500}], [{'amount':'20','amount_minor':2000}])
+        self.assertEqual(income, 2500)
+        self.assertEqual(net_profit_from_buckets_minor(bank_interest=25, expenses=20), 2500)
 
     def test_reversal_offsets_original_interest_profit(self):
         original = {'type':'interest','account':'bank','amount':'25','amount_minor':2500}

@@ -169,21 +169,20 @@ def profit_components(transaction: dict) -> dict[str, int]:
     return vals
 
 def profit_minor(transactions, expenses) -> int:
-    """Canonical net profit in paise from source transactions and expenses."""
-    income = sum(profit_components(row)["income_total"] for row in transactions)
-    costs = sum(abs(_minor_field(row, "amount_minor", ("amount",))) for row in expenses)
-    return income - costs
+    """Cumulative earned profit in paise. Expenses affect group liquidity, not member profit."""
+    return sum(profit_components(row)["income_total"] for row in transactions)
 
 
 def net_profit_from_buckets_minor(*, bank_interest=0, loan_interest=0, other_interest=0,
                                  loan_penalties=0, bc_penalties=0, other_penalties=0,
                                  other_income=0, expenses=0) -> int:
-    """Shared profit arithmetic for MongoDB aggregate buckets (values are rupees)."""
+    """Cumulative earned profit from MongoDB buckets (rupees); expenses are separate cash outflows."""
     income_minor = sum(to_minor(v) for v in (
         bank_interest, loan_interest, other_interest, loan_penalties,
         bc_penalties, other_penalties, other_income,
     ))
-    return income_minor - to_minor(expenses)
+    # Expenses reduce cash/bank balances and are reported separately; they do not reduce cumulative member profit.
+    return income_minor
 
 def monthly_overdue_penalty_minor(start_date: date, payment_date: date, due_day: int, rate_minor_per_day: int = 100) -> int:
     """Cumulative fixed ₹/day charge for each missed monthly cycle after loan start month.

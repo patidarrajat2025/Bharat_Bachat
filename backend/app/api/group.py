@@ -1,7 +1,8 @@
 from datetime import datetime, timezone, date, timedelta
+from bson import ObjectId
 import asyncio
 import uuid
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from ..db import get_db, backfill_financial_feed
 from ..deps import current_user, tenant_guard, require_roles, parse_oid
 from ..models import *
@@ -394,21 +395,129 @@ async def members(tenant_id:str,user=Depends(current_user),page:int|None=None,pa
     share_count=await db.shares.count_documents(share_match)
     return {"items":out,"page":page,"page_size":page_size,"total":total,"active_count":active,"inactive_count":inactive,"total_shares":share_count,"has_more":page*page_size<total}
 
-@router.post("/{tenant_id}/members")
-async def create_member(tenant_id:str,body:MemberCreate,user=Depends(admin_user)):
-    await tenant_guard(user,tenant_id); db=get_db()
-    phone = normalize_phone(body.phone)
-    if await db.users.find_one({"phone":phone}): raise HTTPException(409,"Phone already registered")
-    if body.shares<1: raise HTTPException(400,"At least one share is required")
-    now=datetime.now(timezone.utc)
-    doc=body.model_dump(exclude={"password"})|{"tenant_id":tenant_id,"profile_image_url":None,"profile_image_public_id":None,"created_at":now,"active":True}
-    result=await db.members.insert_one(doc)
+@router.post("/{tenant_id}/members-with-documents")
+async def create_member_with_documents(
+    tenant_id: str,
+    first_name: str = Form(...), last_name: str = Form(""), phone: str = Form(...),
+    secondary_phone: str = Form(""), email: str | None = Form(None), address: str = Form(""),
+    shares: int = Form(1), password: str = Form(...),
+    aadhaar_file: UploadFile = File(...), pan_file: UploadFile | None = File(None),
+    user=Depends(admin_user),
+):
+    """Create a member and store mandatory Aadhaar plus optional PAN in Cloudinary."""
+    await tenant_guard(user, tenant_id)
+    db = get_db()
+    phone_value = normalize_phone(phone)
+    if await db.users.find_one({"phone": phone_value}):
+        raise HTTPException(409, "Phone already registered")
+    if shares < 1 or shares > 100:
+        raise HTTPException(400, "Shares must be between 1 and 100")
+    if aadhaar_file.content_type not in {"image/jpeg", "image/png", "image/webp"}:
+        raise HTTPException(415, "Aadhaar must be a JPG, PNG or WebP image")
+    aadhaar_bytes = await aadhaar_file.read()
+    max_bytes = settings.max_upload_mb * 1024 * 1024
+    if not aadhaar_bytes or len(aadhaar_bytes) > max_bytes:
+        raise HTTPException(413, "Aadhaar image is empty or exceeds the upload size limit")
+    pan_bytes = None
+    if pan_file and pan_file.filename:
+        if pan_file.content_type not in {"image/jpeg", "image/png", "image/webp"}:
+            raise HTTPException(415, "PAN must be a JPG, PNG or WebP image")
+        pan_bytes = await pan_file.read()
+        if not pan_bytes or len(pan_bytes) > max_bytes:
+            raise HTTPException(413, "PAN image is empty or exceeds the upload size limit")
     try:
-        await db.users.insert_one({"tenant_id":parse_oid(tenant_id),"member_id":str(result.inserted_id),"phone":phone,"password_hash":hash_password(body.password),"name":f"{body.first_name} {body.last_name}".strip(),"email":body.email,"role":"member","active":True,"must_change_password":True,"password_changed_at":now,"created_at":now})
+        body = MemberCreate(first_name=first_name, last_name=last_name, phone=phone_value,
+                            secondary_phone=secondary_phone, email=(email or "").strip() or None,
+                            address=address, shares=shares, password=password)
+    except Exception as exc:
+        raise HTTPException(422, str(exc)) from exc
+    now = datetime.now(timezone.utc)
+    member_id = ObjectId()
+    uploaded = []
+    try:
+        aadhaar_asset = upload_bytes(aadhaar_bytes, public_id=f"aadhaar-{uuid.uuid4().hex}",
+            folder=f"bharat-bachat/tenants/{tenant_id}/members/{member_id}/documents", resource_type="image")
+        uploaded.append(aadhaar_asset)
+        pan_asset = None
+        if pan_bytes:
+            pan_asset = upload_bytes(pan_bytes, public_id=f"pan-{uuid.uuid4().hex}",
+                folder=f"bharat-bachat/tenants/{tenant_id}/members/{member_id}/documents", resource_type="image")
+            uploaded.append(pan_asset)
+        doc = body.model_dump(exclude={"password"}) | {
+            "tenant_id": tenant_id, "profile_image_url": None, "profile_image_public_id": None,
+            "aadhaar_card_url": aadhaar_asset.get("secure_url"), "aadhaar_card_public_id": aadhaar_asset.get("public_id"),
+            "pan_card_url": pan_asset.get("secure_url") if pan_asset else None,
+            "pan_card_public_id": pan_asset.get("public_id") if pan_asset else None,
+            "created_at": now, "active": True,
+        }
+        doc["_id"] = member_id
+        await db.members.insert_one(doc)
+        await db.users.insert_one({"tenant_id": parse_oid(tenant_id), "member_id": str(member_id),
+            "phone": phone_value, "password_hash": hash_password(body.password),
+            "name": f"{body.first_name} {body.last_name}".strip(), "email": body.email,
+            "role": "member", "active": True, "must_change_password": True,
+            "password_changed_at": now, "created_at": now})
+        await ensure_member_shares(await db.members.find_one({"_id": member_id, "tenant_id": tenant_id}))
+        await audit(tenant_id, user, "MEMBER_CREATED", "member", str(member_id), {"shares": body.shares, "aadhaar_uploaded": True, "pan_uploaded": bool(pan_asset)})
+        return {"id": str(member_id), "aadhaar_card_url": aadhaar_asset.get("secure_url"), "pan_card_url": pan_asset.get("secure_url") if pan_asset else None}
     except Exception:
-        await db.members.delete_one({"_id":result.inserted_id,"tenant_id":tenant_id}); raise
-    await ensure_member_shares(await db.members.find_one({"_id":result.inserted_id}))
-    await audit(tenant_id,user,"MEMBER_CREATED","member",str(result.inserted_id),{"shares":body.shares}); return {"id":str(result.inserted_id)}
+        if member_id:
+            await db.members.delete_one({"_id": member_id, "tenant_id": tenant_id})
+            await db.users.delete_one({"tenant_id": parse_oid(tenant_id), "member_id": str(member_id)})
+            await db.shares.delete_many({"tenant_id": tenant_id, "member_id": str(member_id)})
+        for asset in uploaded:
+            try: delete_asset(asset.get("public_id"), "image")
+            except Exception: pass
+        raise
+
+@router.post("/{tenant_id}/members/{member_id}/documents")
+async def upload_member_documents(
+    tenant_id: str, member_id: str,
+    aadhaar_file: UploadFile | None = File(None), pan_file: UploadFile | None = File(None),
+    user=Depends(admin_user),
+):
+    await tenant_guard(user, tenant_id)
+    if not (aadhaar_file and aadhaar_file.filename) and not (pan_file and pan_file.filename):
+        raise HTTPException(400, "Choose an Aadhaar or PAN image first")
+    db = get_db(); member = await get_member(db, tenant_id, member_id); updates = {}; uploaded = []; persisted = False
+    if not member.get("aadhaar_card_url") and not (aadhaar_file and aadhaar_file.filename):
+        raise HTTPException(400, "Aadhaar image is mandatory for this member.")
+    max_bytes = settings.max_upload_mb * 1024 * 1024
+    try:
+        for file, prefix, url_field, id_field in (
+            (aadhaar_file, "aadhaar", "aadhaar_card_url", "aadhaar_card_public_id"),
+            (pan_file, "pan", "pan_card_url", "pan_card_public_id"),
+        ):
+            if not file or not file.filename: continue
+            if file.content_type not in {"image/jpeg", "image/png", "image/webp"}:
+                raise HTTPException(415, f"{prefix.upper()} must be a JPG, PNG or WebP image")
+            data = await file.read()
+            if not data or len(data) > max_bytes:
+                raise HTTPException(413, f"{prefix.upper()} image is empty or exceeds the upload size limit")
+            asset = upload_bytes(data, public_id=f"{prefix}-{member_id}-{uuid.uuid4().hex[:8]}",
+                folder=f"bharat-bachat/tenants/{tenant_id}/members/{member_id}/documents", resource_type="image")
+            uploaded.append((asset, member.get(id_field)))
+            updates[url_field] = asset.get("secure_url"); updates[id_field] = asset.get("public_id")
+        await db.members.update_one({"_id": member["_id"], "tenant_id": tenant_id}, {"$set": updates})
+        persisted = True
+        for asset, old_id in uploaded:
+            if old_id and old_id != asset.get("public_id"):
+                try: delete_asset(old_id, "image")
+                except Exception: pass
+        await audit(tenant_id, user, "MEMBER_DOCUMENTS_UPLOADED", "member", member_id,
+                    {"aadhaar_updated": "aadhaar_card_url" in updates, "pan_updated": "pan_card_url" in updates})
+        return {"ok": True, **updates}
+    except Exception:
+        if not persisted:
+            for asset, _ in uploaded:
+                try: delete_asset(asset.get("public_id"), "image")
+                except Exception: pass
+        raise
+
+@router.post("/{tenant_id}/members")
+async def create_member(tenant_id: str, body: MemberCreate, user=Depends(admin_user)):
+    await tenant_guard(user, tenant_id)
+    raise HTTPException(400, "Aadhaar image is mandatory. Use the member-with-documents onboarding flow.")
 
 @router.patch("/{tenant_id}/members/{member_id}")
 async def update_member(tenant_id:str,member_id:str,body:MemberUpdate,user=Depends(admin_user)):

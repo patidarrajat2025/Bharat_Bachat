@@ -3234,3 +3234,9 @@ button,.btn-primary,.btn-secondary,.input,textarea,select{font-size:15px}
   .app-shell[data-route="/admin"] .collection-hub-cards > .admin-operation-card strong{font-size:12px!important}
   .app-shell[data-route="/admin"] .collection-hub-cards > .admin-operation-card small{font-size:9.5px!important}
 }
+
+/* Group loan details now include collected interest as a fifth finance metric. */
+.app-shell[data-route="/loans"] .loan-finance-grid{grid-template-columns:repeat(auto-fit,minmax(125px,1fr))}
+@media(max-width:760px){.app-shell[data-route="/loans"] .loan-finance-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.app-shell[data-route="/loans"] .loan-borrower-head{min-height:54px}}
+
+.app-shell[data-route="/loans"] .loan-borrower-head{border:0;background:transparent;padding:0;cursor:pointer}

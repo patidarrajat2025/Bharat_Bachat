@@ -288,6 +288,28 @@ export const trDynamic=(value:string)=>{
   return hi[text] ?? hiFallback(text);
 };
 
+Object.assign(hi, {
+  "Member Documents":"सदस्य दस्तावेज़", "Aadhaar Card":"आधार कार्ड", "PAN Card":"पैन कार्ड",
+  "Aadhaar Card Image":"आधार कार्ड की तस्वीर", "PAN Card Image":"पैन कार्ड की तस्वीर",
+  "Required":"अनिवार्य", "Optional":"वैकल्पिक", "Uploaded":"अपलोड किया गया", "Required missing":"अपलोड अनिवार्य",
+  "View Documents":"दस्तावेज़ देखें", "View Aadhaar":"आधार देखें", "View PAN":"पैन देखें",
+  "Upload Documents":"दस्तावेज़ अपलोड करें", "Upload / Replace Aadhaar":"आधार अपलोड / बदलें",
+  "Upload / Replace PAN (optional)":"पैन अपलोड / बदलें (वैकल्पिक)",
+  "Aadhaar card is mandatory. PAN card is optional. Images are securely stored in Cloudinary.":"आधार कार्ड अनिवार्य है। पैन कार्ड वैकल्पिक है। तस्वीरें Cloudinary पर सुरक्षित रखी जाती हैं।",
+  "Select either or both documents to replace or upload. Aadhaar is required during new member creation.":"अपलोड या बदलने के लिए एक या दोनों दस्तावेज़ चुनें। नया सदस्य जोड़ते समय आधार अनिवार्य है।",
+  "Create Member & Upload Documents":"सदस्य बनाएं और दस्तावेज़ अपलोड करें", "Interest Due":"बाकी ब्याज", "Active Loan":"सक्रिय ऋण", "Closed Loan":"बंद ऋण"
+});
+Object.assign(en, {
+  "Member Documents":"Member Documents", "Aadhaar Card":"Aadhaar Card", "PAN Card":"PAN Card",
+  "Aadhaar Card Image":"Aadhaar Card Image", "PAN Card Image":"PAN Card Image",
+  "Required":"Required", "Optional":"Optional", "Uploaded":"Uploaded", "Required missing":"Required missing",
+  "View Documents":"View Documents", "View Aadhaar":"View Aadhaar", "View PAN":"View PAN",
+  "Upload Documents":"Upload Documents", "Upload / Replace Aadhaar":"Upload / Replace Aadhaar",
+  "Upload / Replace PAN (optional)":"Upload / Replace PAN (optional)",
+  "Aadhaar card is mandatory. PAN card is optional. Images are securely stored in Cloudinary.":"Aadhaar card is mandatory. PAN card is optional. Images are securely stored in Cloudinary.",
+  "Select either or both documents to replace or upload. Aadhaar is required during new member creation.":"Select either or both documents to replace or upload. Aadhaar is required during new member creation.",
+  "Create Member & Upload Documents":"Create Member & Upload Documents", "Interest Due":"Interest Due", "Active Loan":"Active Loan", "Closed Loan":"Closed Loan"
+});
 i18n.addResourceBundle('hi','translation',hi,true,true);
 i18n.addResourceBundle('en','translation',en,true,true);
 

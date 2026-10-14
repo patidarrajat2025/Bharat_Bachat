@@ -147,6 +147,8 @@ export const api={
  memberDetails:(tid:string,mid:string)=>request<any>(`/group/${tid}/members/${mid}/details`),
  memberActivity:(tid:string,mid:string,page=1,pageSize=10)=>request<any>(`/group/${tid}/members/${mid}/activity?page=${page}&page_size=${pageSize}`),
  addMember:(id:string,b:any)=>request<any>(`/group/${id}/members`,{method:'POST',body:JSON.stringify(b)}),
+ addMemberWithDocuments:(id:string,b:any,aadhaar:File,pan?:File|null)=>{const fd=new FormData();for(const [k,v] of Object.entries(b)){if(v!==undefined&&v!==null&&String(v)!=='')fd.append(k,String(v));}fd.append('aadhaar_file',aadhaar);if(pan)fd.append('pan_file',pan);return request<any>(`/group/${id}/members-with-documents`,{method:'POST',body:fd})},
+ uploadMemberDocuments:(tid:string,mid:string,aadhaar?:File|null,pan?:File|null)=>{const fd=new FormData();if(aadhaar)fd.append('aadhaar_file',aadhaar);if(pan)fd.append('pan_file',pan);return request<any>(`/group/${tid}/members/${mid}/documents`,{method:'POST',body:fd})},
  updateMember:(tid:string,mid:string,b:any)=>request<any>(`/group/${tid}/members/${mid}`,{method:'PATCH',body:JSON.stringify(b)}),
  memberStatus:(tid:string,mid:string,active:boolean)=>request<any>(`/group/${tid}/members/${mid}/status`,{method:'PATCH',body:JSON.stringify({active})}),
  resetMemberPassword:(tid:string,mid:string,password:string)=>request<any>(`/group/${tid}/members/${mid}/reset-password`,{method:'POST',body:JSON.stringify({password})}),

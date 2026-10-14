@@ -102,8 +102,8 @@ async def profit_report(tenant_id: str, start: datetime | None = None, end: date
             bucket["expenses_minor"] += amount
 
     for bucket in monthly.values():
-        bucket["profit_minor"] = bucket["income_minor"] - bucket["expenses_minor"]
-    return {"income_minor":income_minor,"expense_minor":expense_minor,"net_profit_minor":income_minor-expense_minor,
+        bucket["profit_minor"] = bucket["income_minor"]
+    return {"income_minor":income_minor,"expense_minor":expense_minor,"net_profit_minor":income_minor,
             "components_minor":components,"income_entries_count":income_count,"entries":entries,"monthly":monthly}
 
 
@@ -237,7 +237,8 @@ async def tenant_summary(tenant_id: str, member_id: str | None = None):
     # Define expenses before using it so an empty expense aggregate is safe.
     exp_total = int(canonical_profit.get("expense_minor", 0) or 0) / 100
     # Principal repayments and loan disbursements are balance-sheet movements,
-    # not profit. Expenses are costs. Profit is canonical across all read models.
+    # not profit. Per group policy, earned profit is cumulative and expenses reduce
+    # cash/bank balances only; expenses are reported separately, not deducted from profit.
     profit_income_minor = int(canonical_profit["net_profit_minor"])
     profit_income = profit_income_minor / 100
     bc_fund = float(tx.get("regular_contributions", 0) or 0) + interest + penalties + loan_interest_income + other_interest_income
