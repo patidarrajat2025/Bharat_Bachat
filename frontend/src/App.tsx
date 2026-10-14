@@ -148,7 +148,6 @@ function MemberDashboard(){
   const [shares,setShares]=useState<Share[]>([]),[vaultView,setVaultView]=useState<'group'|'personal'>('group');
   const [personal,setPersonal]=useState<Transaction[]>([]),[personalLoans,setPersonalLoans]=useState<Loan[]>([]),[groupSummary,setGroupSummary]=useState<any>(),[groupActivity,setGroupActivity]=useState<any[]>([]),[activityPage,setActivityPage]=useState(1),[activityHasMore,setActivityHasMore]=useState(false),[activityLoadingMore,setActivityLoadingMore]=useState(false),[kist,setKist]=useState<any>(),[memberProfit,setMemberProfit]=useState(0),[err,setErr]=useState('');
   useEffect(()=>{if(!tid||!user?.member_id)return;void api.dashboard(tid).then((d:any)=>{setTenant(d.tenant);setGroupSummary(d.summary);setMemberProfit(Number(d.summary?.member_profit||0));setGroupActivity(d.activity||[]);setActivityPage(1);setActivityHasMore(Boolean(d.activity_has_more));setKist(d.kist);setShares(d.shares||[]);setPersonal(d.personal||[]);setPersonalLoans(d.personal_loans||[])}).catch(e=>setErr(e.message))},[tid,user?.member_id]);
-
   const mySavings=personal.filter(x=>x.type==='contribution').reduce((a,x)=>a+x.amount,0);
   const myInflow=personal.filter(x=>x.amount>0).reduce((a,x)=>a+x.amount,0);
   const myOutflow=-personal.filter(x=>x.amount<0).reduce((a,x)=>a+x.amount,0);
