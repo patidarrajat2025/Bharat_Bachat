@@ -56,7 +56,8 @@ async def receipt_bundle(tenant_id:str,member_id:str,from_date:date|None=None,to
 @router.get("/monthly-kist/{tenant_id}/{member_id}/{period}")
 async def monthly_kist_receipt(tenant_id:str,member_id:str,period:str,user=Depends(current_user)):
     await tenant_guard(user,tenant_id)
-    if user["role"]=="member" and str(user.get("member_id"))!=member_id: raise HTTPException(403,"Access denied")
+    if user.get("role") not in {"group_admin", "super_admin"}:
+        raise HTTPException(403,"Monthly Kist receipts are available to administrators only")
     try:
         y,m=map(int,period.split("-")); start=date(y,m,1); end=date(y+1,1,1) if m==12 else date(y,m+1,1)
     except Exception: raise HTTPException(400,"Invalid period")

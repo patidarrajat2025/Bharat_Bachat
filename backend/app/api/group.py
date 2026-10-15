@@ -442,10 +442,10 @@ async def create_member_with_documents(
     first_name: str = Form(...), last_name: str = Form(""), phone: str = Form(...),
     secondary_phone: str = Form(""), email: str | None = Form(None), address: str = Form(""),
     shares: int = Form(1), password: str = Form(...),
-    aadhaar_file: UploadFile = File(...), pan_file: UploadFile | None = File(None),
+    aadhaar_file: UploadFile | None = File(None), pan_file: UploadFile | None = File(None),
     user=Depends(admin_user),
 ):
-    """Create a member and store mandatory Aadhaar plus optional PAN in Cloudinary."""
+    """Create a member; identity document images are optional."""
     await tenant_guard(user, tenant_id)
     db = get_db()
     phone_value = normalize_phone(phone)
@@ -453,12 +453,14 @@ async def create_member_with_documents(
         raise HTTPException(409, "Phone already registered")
     if shares < 1 or shares > 100:
         raise HTTPException(400, "Shares must be between 1 and 100")
-    if aadhaar_file.content_type not in {"image/jpeg", "image/png", "image/webp"}:
-        raise HTTPException(415, "Aadhaar must be a JPG, PNG or WebP image")
-    aadhaar_bytes = await aadhaar_file.read()
     max_bytes = settings.max_upload_mb * 1024 * 1024
-    if not aadhaar_bytes or len(aadhaar_bytes) > max_bytes:
-        raise HTTPException(413, "Aadhaar image is empty or exceeds the upload size limit")
+    aadhaar_bytes = None
+    if aadhaar_file and aadhaar_file.filename:
+        if aadhaar_file.content_type not in {"image/jpeg", "image/png", "image/webp"}:
+            raise HTTPException(415, "Aadhaar must be a JPG, PNG or WebP image")
+        aadhaar_bytes = await aadhaar_file.read()
+        if not aadhaar_bytes or len(aadhaar_bytes) > max_bytes:
+            raise HTTPException(413, "Aadhaar image is empty or exceeds the upload size limit")
     pan_bytes = None
     if pan_file and pan_file.filename:
         if pan_file.content_type not in {"image/jpeg", "image/png", "image/webp"}:
@@ -476,9 +478,11 @@ async def create_member_with_documents(
     member_id = ObjectId()
     uploaded = []
     try:
-        aadhaar_asset = upload_bytes(aadhaar_bytes, public_id=f"aadhaar-{uuid.uuid4().hex}",
-            folder=f"bharat-bachat/tenants/{tenant_id}/members/{member_id}/documents", resource_type="image")
-        uploaded.append(aadhaar_asset)
+        aadhaar_asset = None
+        if aadhaar_bytes:
+            aadhaar_asset = upload_bytes(aadhaar_bytes, public_id=f"aadhaar-{uuid.uuid4().hex}",
+                folder=f"bharat-bachat/tenants/{tenant_id}/members/{member_id}/documents", resource_type="image")
+            uploaded.append(aadhaar_asset)
         pan_asset = None
         if pan_bytes:
             pan_asset = upload_bytes(pan_bytes, public_id=f"pan-{uuid.uuid4().hex}",
@@ -486,7 +490,7 @@ async def create_member_with_documents(
             uploaded.append(pan_asset)
         doc = body.model_dump(exclude={"password"}) | {
             "tenant_id": tenant_id, "profile_image_url": None, "profile_image_public_id": None,
-            "aadhaar_card_url": aadhaar_asset.get("secure_url"), "aadhaar_card_public_id": aadhaar_asset.get("public_id"),
+            "aadhaar_card_url": aadhaar_asset.get("secure_url") if aadhaar_asset else None, "aadhaar_card_public_id": aadhaar_asset.get("public_id") if aadhaar_asset else None,
             "pan_card_url": pan_asset.get("secure_url") if pan_asset else None,
             "pan_card_public_id": pan_asset.get("public_id") if pan_asset else None,
             "created_at": now, "active": True,
@@ -499,8 +503,8 @@ async def create_member_with_documents(
             "role": "member", "active": True, "must_change_password": True,
             "password_changed_at": now, "created_at": now})
         await ensure_member_shares(await db.members.find_one({"_id": member_id, "tenant_id": tenant_id}))
-        await audit(tenant_id, user, "MEMBER_CREATED", "member", str(member_id), {"shares": body.shares, "aadhaar_uploaded": True, "pan_uploaded": bool(pan_asset)})
-        return {"id": str(member_id), "aadhaar_card_url": aadhaar_asset.get("secure_url"), "pan_card_url": pan_asset.get("secure_url") if pan_asset else None}
+        await audit(tenant_id, user, "MEMBER_CREATED", "member", str(member_id), {"shares": body.shares, "aadhaar_uploaded": bool(aadhaar_asset), "pan_uploaded": bool(pan_asset)})
+        return {"id": str(member_id), "aadhaar_card_url": aadhaar_asset.get("secure_url") if aadhaar_asset else None, "pan_card_url": pan_asset.get("secure_url") if pan_asset else None}
     except Exception:
         if member_id:
             await db.members.delete_one({"_id": member_id, "tenant_id": tenant_id})
@@ -521,8 +525,6 @@ async def upload_member_documents(
     if not (aadhaar_file and aadhaar_file.filename) and not (pan_file and pan_file.filename):
         raise HTTPException(400, "Choose an Aadhaar or PAN image first")
     db = get_db(); member = await get_member(db, tenant_id, member_id); updates = {}; uploaded = []; persisted = False
-    if not member.get("aadhaar_card_url") and not (aadhaar_file and aadhaar_file.filename):
-        raise HTTPException(400, "Aadhaar image is mandatory for this member.")
     max_bytes = settings.max_upload_mb * 1024 * 1024
     try:
         for file, prefix, url_field, id_field in (
@@ -558,7 +560,7 @@ async def upload_member_documents(
 @router.post("/{tenant_id}/members")
 async def create_member(tenant_id: str, body: MemberCreate, user=Depends(admin_user)):
     await tenant_guard(user, tenant_id)
-    raise HTTPException(400, "Aadhaar image is mandatory. Use the member-with-documents onboarding flow.")
+    raise HTTPException(400, "Use the member onboarding form to create a member.")
 
 @router.patch("/{tenant_id}/members/{member_id}")
 async def update_member(tenant_id:str,member_id:str,body:MemberUpdate,user=Depends(admin_user)):

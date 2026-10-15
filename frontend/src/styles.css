@@ -2506,6 +2506,37 @@ button,.btn-primary,.btn-secondary,.input,textarea,select{font-size:15px}
 .input,textarea,select{min-height:50px}
 .page-title h1,.page-heading h1,.figma-page-heading h1{font-weight:850;letter-spacing:-.025em}
 .money,.positive,.negative,.vault-account-card strong,.accounting-source-card b,.screen-summary-card strong{font-variant-numeric:tabular-nums;white-space:nowrap}
+
+/* Financial amounts always occupy their own line.  min-width:0 prevents a
+   flex/grid child from pushing the card wider than its container. */
+.metric-tile,.screen-summary-card,.vault-account-card,.accounting-source-card,.kist-status-card{
+  min-width:0;
+  overflow:hidden;
+}
+.metric-tile>span,.screen-summary-card>span,.vault-account-card span,.accounting-source-card span,.kist-status-card>span{
+  display:block;
+  min-width:0;
+  line-height:1.25;
+  overflow-wrap:anywhere;
+}
+.metric-tile>strong,.screen-summary-card>strong,.vault-account-card strong,.accounting-source-card b,.kist-status-card>strong{
+  display:block;
+  min-width:0;
+  margin-top:6px;
+  line-height:1.15;
+  white-space:nowrap;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  font-variant-numeric:tabular-nums;
+}
+.kist-status-card small,.vault-account-card small,.accounting-source-card small{
+  display:block;
+  min-width:0;
+  margin-top:5px;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
 .bank-transaction-card{min-height:96px;padding:16px 18px;border:1px solid var(--bb-border);border-radius:18px;background:#fff;box-shadow:0 5px 18px rgba(15,23,42,.055)}
 .bank-tx-main{gap:6px}.bank-tx-main strong{font-size:16px;font-weight:850;line-height:1.25}.bank-tx-badge{font-size:12px;font-weight:750}.bank-tx-main small{font-size:12px}.bank-tx-side strong{font-size:17px;font-weight:900}.bank-tx-side small{font-size:11px;font-weight:700}
 .member-card-meta{display:flex;justify-content:space-between;gap:10px;margin-top:13px;padding-top:11px;border-top:1px solid #EEF2F5;color:#64748B;font-size:12px;font-weight:700}
