@@ -3282,3 +3282,16 @@ button,.btn-primary,.btn-secondary,.input,textarea,select{font-size:15px}
 @media(max-width:760px){.app-shell[data-route="/loans"] .loan-finance-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.app-shell[data-route="/loans"] .loan-borrower-head{min-height:54px}}
 
 .app-shell[data-route="/loans"] .loan-borrower-head{border:0;background:transparent;padding:0;cursor:pointer}
+
+/* Bharat Bachat: responsive status cards and compact drill-down controls */
+.kist-status-card{padding:clamp(8px,1.2vw,15px)!important;min-width:0!important;overflow:hidden!important}
+.kist-status-card strong{font-size:clamp(11px,1.15vw,16px)!important;white-space:nowrap!important;overflow:visible!important;text-overflow:clip!important;letter-spacing:-.025em;font-variant-numeric:tabular-nums}
+.kist-status-card small{font-size:clamp(8px,.75vw,10px)!important;white-space:normal!important;overflow-wrap:anywhere;line-height:1.25}
+.kist-status-card span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.kist-drill-actions{display:flex;gap:10px;flex-wrap:wrap;margin:0 0 14px;padding:12px;border:1px solid var(--ui-line);border-radius:14px;background:var(--ui-surface, #fff)}
+.kist-drill-message{font-size:13px;margin:8px 0 12px;color:var(--ui-text-secondary,#52616b)}
+.kist-drill-amount{width:132px;min-width:90px;margin-left:auto}
+.kist-share-line{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.kist-receipt-actions{display:flex;gap:8px;flex-wrap:wrap;padding:10px 14px 14px;border-top:1px solid var(--ui-line)}
+.kist-receipt-actions button{display:inline-flex;align-items:center;gap:6px}
+@media(max-width:420px){.kist-status-grid{gap:6px!important}.kist-status-card{padding:8px 6px!important;min-height:88px!important}.kist-status-card strong{font-size:clamp(10px,3vw,13px)!important}.kist-status-card small{font-size:8px!important}.kist-drill-amount{width:100%;margin-left:0}}

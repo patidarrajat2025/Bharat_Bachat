@@ -267,3 +267,35 @@ def receipt_pdf(tenant_name, member_name, amount, receipt_type, reference, date_
 def receipt_bundle_pdf(tenant_name, member_name, rows, logo_url=None, logo_bytes=None):
     # The receipt bundle intentionally uses the same passbook visual system so every PDF from the app feels like one product.
     return passbook_pdf(tenant_name, member_name, rows, logo_url, logo_bytes)
+
+
+def monthly_kist_statement_pdf(tenant_name, member_name, period, rows, logo_url=None, logo_bytes=None):
+    """Admin-only monthly collection statement, separate from the member passbook."""
+    buf, doc = _doc('Bharat Bachat Monthly Kist Statement')
+    st = _base_styles(); story = []
+    _header(story, tenant_name, member_name, logo_url, f'Monthly Kist Statement · {period}', logo_bytes)
+    def amount(v): return f'₹ {float(v or 0):,.2f}'
+    total = sum(float(r.get('amount', 0) or 0) for r in rows if float(r.get('amount', 0) or 0) > 0)
+    story.append(_summary_grid([('Statement Month', str(period), 'neutral'), ('Total Collected', amount(total), 'green'), ('Transactions', str(len(rows)), 'neutral'), ('Member', member_name or '—', 'neutral')], st))
+    story += [Spacer(1, 5*mm), Paragraph('Itemized Monthly Transactions', st['section']), Spacer(1, 2*mm)]
+    data = [[Paragraph('DATE', st['table_head']), Paragraph('DETAILS', st['table_head']), Paragraph('TRANSACTION REF', st['table_head']), Paragraph('AMOUNT (₹)', st['table_head'])]]
+    for r in rows:
+        typ = str(r.get('statement_label') or r.get('type', 'Transaction')).replace('_', ' ').title()
+        if r.get('type') == 'loan_repayment':
+            principal = float(r.get('principal_paid', r.get('principal', 0)) or 0)
+            interest = float(r.get('loan_interest_collected', r.get('interest', 0)) or 0)
+            detail = f'{typ} (Principal {amount(principal)} + Interest {amount(interest)})'
+        else: detail = typ
+        ref = str(r.get('transaction_ref') or r.get('_id') or '—')
+        data.append([Paragraph(str(r.get('date', ''))[:10], st['table']), Paragraph(detail[:100], st['table']), Paragraph(ref[:36], st['table']), Paragraph(amount(r.get('amount', 0)), st['table_right'])])
+    table = Table(data, colWidths=[24*mm, 76*mm, 45*mm, 35*mm], repeatRows=1)
+    table.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),NAVY_DARK),('TEXTCOLOR',(0,0),(-1,0),WHITE),('ROWBACKGROUNDS',(0,1),(-1,-1),[WHITE,GREY_MINT]),('GRID',(0,0),(-1,-1),0.35,LINE),('VALIGN',(0,0),(-1,-1),'MIDDLE'),('LEFTPADDING',(0,0),(-1,-1),2.5*mm),('RIGHTPADDING',(0,0),(-1,-1),2.5*mm),('TOPPADDING',(0,0),(-1,-1),3*mm),('BOTTOMPADDING',(0,0),(-1,-1),3*mm)]))
+    story += [table, Spacer(1, 8*mm)]
+    total_box = Table([[Paragraph('<b>TOTAL AMOUNT COLLECTED FOR THE MONTH</b>', st['label']), Paragraph(f'<b>{amount(total)}</b>', st['metric_green'])]], colWidths=[120*mm,60*mm])
+    total_box.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),GREEN_SOFT),('BOX',(0,0),(-1,-1),0.8,LINE),('VALIGN',(0,0),(-1,-1),'MIDDLE'),('LEFTPADDING',(0,0),(-1,-1),4*mm),('RIGHTPADDING',(0,0),(-1,-1),4*mm),('TOPPADDING',(0,0),(-1,-1),5*mm),('BOTTOMPADDING',(0,0),(-1,-1),5*mm)]))
+    story += [total_box, Spacer(1, 18*mm)]
+    sig = Table([[Paragraph('Admin Signature: __________________________________', st['body'])],[Paragraph(f'{tenant_name} · Authorized Group Administrator', st['small'])]], colWidths=[100*mm])
+    sig.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'MIDDLE'),('TOPPADDING',(0,0),(-1,-1),2*mm),('BOTTOMPADDING',(0,0),(-1,-1),2*mm)]))
+    story.append(sig)
+    doc.build(story, onFirstPage=_footer, onLaterPages=_footer)
+    buf.seek(0); return buf

@@ -967,15 +967,19 @@ async def monthly_kist_summary(tenant_id:str,period:str,user=Depends(current_use
             {"$group":{"_id":None,"total_minor":{"$sum":{"$abs":_mongo_amount_minor_expr()}}}}
         ]).to_list(1)
         member_expenses=float(from_minor(int((allocation_row[0] if allocation_row else {}).get("total_minor",0) or 0)))
-    expected_minor=paid_minor=0; paid_shares=partial_shares=pending_shares=0
+    expected_minor=paid_minor=0; paid_shares=partial_shares=pending_shares=0; paid_members=partial_members=pending_members=0
     for member in members:
+        member_share_statuses=[]
         for share in shares_by_member.get(str(member["_id"]),[]):
             sid=str(share["_id"]); p_minor=max(0,int(paid_by_share.get(sid,0))+int(paid_by_legacy.get((str(member["_id"]),int(share["share_no"])),0)))
             expected_minor+=expected_per_share_minor; paid_minor+=min(p_minor,expected_per_share_minor); remaining_minor=max(0,expected_per_share_minor-p_minor)
-            if remaining_minor<=0: paid_shares+=1
-            elif p_minor>0: partial_shares+=1
-            else: pending_shares+=1
-    result={"period":period,"expected_total":float(from_minor(expected_minor)),"paid_total":float(from_minor(paid_minor)),"pending_total":float(from_minor(max(0,expected_minor-paid_minor))),"paid_shares":int(paid_shares),"partial_shares":int(partial_shares),"pending_shares":int(pending_shares),"active_members":len(members)}
+            if remaining_minor<=0: paid_shares+=1; member_share_statuses.append("paid")
+            elif p_minor>0: partial_shares+=1; member_share_statuses.append("partial")
+            else: pending_shares+=1; member_share_statuses.append("pending")
+        if member_share_statuses and all(x=="paid" for x in member_share_statuses): paid_members+=1
+        elif member_share_statuses and all(x=="pending" for x in member_share_statuses): pending_members+=1
+        elif member_share_statuses: partial_members+=1
+    result={"period":period,"expected_total":float(from_minor(expected_minor)),"paid_total":float(from_minor(paid_minor)),"pending_total":float(from_minor(max(0,expected_minor-paid_minor))),"paid_shares":int(paid_shares),"partial_shares":int(partial_shares),"pending_shares":int(pending_shares),"paid_members":int(paid_members),"partial_members":int(partial_members),"pending_members":int(pending_members),"active_members":len(members)}
     if user["role"]=="member": result["member_expenses"]=member_expenses
     else: result["group_expenses"]=group_expenses
     return result
@@ -1377,9 +1381,13 @@ async def accounting_view(tenant_id:str, view:str, period:str|None=None, account
         if newer_or:
             newer=await db.financial_feed.aggregate([{"$match":{**base_query,"$or":newer_or}},{"$group":{"_id":None,"net":{"$sum":{"$ifNull":["$amount",0]}}}}]).to_list(1)
             newer_net=float((newer[0] if newer else {}).get("net",0) or 0)
-        balance=round(float(closing_balance)-newer_net,2); out=[]
+        # Keep the ledger walk in integer paise so each row is reproducible and
+        # the oldest row cannot drift due to repeated binary-float subtraction.
+        balance_minor=to_minor(closing_balance)-to_minor(newer_net); out=[]
         for row in rows:
-            x=dict(row); x["running_balance"]=round(balance,2); balance=round(balance-float(row.get("amount",0) or 0),2); out.append(x)
+            amount_minor=to_minor(row.get("amount",0) or 0)
+            x=dict(row); x["running_balance"]=float(from_minor(balance_minor)); out.append(x)
+            balance_minor-=amount_minor
         return out
 
     # Final mobile feed path: MongoDB paginates the materialized financial read model.
