@@ -1333,6 +1333,14 @@ async def accounting_reconciliation(tenant_id: str, user=Depends(admin_user)):
     }
 
 
+def _assert_accounting_view_access(role: str | None, view: str) -> None:
+    """Authorize accounting drill-downs; members only receive personal profit summary."""
+    if role not in ("member", "group_admin", "super_admin"):
+        raise HTTPException(403, "Accounting access denied")
+    if role == "member" and view != "profit":
+        raise HTTPException(403, "Members cannot access group-wide accounting records")
+
+
 @router.get("/{tenant_id}/accounting/{view}")
 async def accounting_view(tenant_id:str, view:str, period:str|None=None, account:str|None=None, filter:str|None=None, page:int=1, page_size:int=10, user=Depends(current_user)):
     """Accounting drill-down read model.
@@ -1344,14 +1352,11 @@ async def accounting_view(tenant_id:str, view:str, period:str|None=None, account
     """
     await tenant_guard(user, tenant_id)
     allowed={"profit","expenses","outflows","closing","interest","active-loans","kist","register"}
-    if user.get("role") not in ("member", "group_admin", "super_admin"):
-        raise HTTPException(403,"Accounting access denied")
-    if user.get("role")=="member" and view not in allowed:
-        raise HTTPException(403,"Accounting access denied")
-    # Members may open read-only dashboard drill-downs for group summary cards.
-    # Mutation endpoints remain role-protected separately; this endpoint only
-    # returns audited accounting read models scoped to the authenticated tenant.
-    if view not in allowed: raise HTTPException(404,"Accounting view not found")
+    # This endpoint's non-profit views contain group-wide raw rows. A tenant
+    # guard alone does not authorize an individual member to see those records.
+    _assert_accounting_view_access(user.get("role"), view)
+    if view not in allowed:
+        raise HTTPException(404, "Accounting view not found")
     db=get_db()
     tenant=await db.tenants.find_one({"_id":parse_oid(tenant_id)})
     if not tenant: raise HTTPException(404,"Group not found")
