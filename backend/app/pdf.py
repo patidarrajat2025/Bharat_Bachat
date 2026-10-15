@@ -1,5 +1,6 @@
 from io import BytesIO
 from pathlib import Path
+from xml.sax.saxutils import escape
 from datetime import datetime
 from urllib.request import urlopen
 import asyncio
@@ -10,7 +11,8 @@ from reportlab.lib.enums import TA_LEFT, TA_RIGHT, TA_CENTER
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image, KeepTogether
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, Image, KeepTogether, Flowable
+from reportlab.graphics.shapes import Drawing, Circle, String
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
@@ -183,61 +185,143 @@ def _metric_card(label, value, style, bg):
 
 
 def _summary_grid(rows, st):
-    cards=[]
-    for label, value, kind in rows:
-        style = st['metric_green'] if kind=='green' else st['metric_red'] if kind=='red' else st['metric']
-        bg = GREEN_SOFT if kind=='green' else RED_SOFT if kind=='red' else colors.HexColor('#F7F9F8')
-        cards.append(_metric_card(label, value, style, bg))
-    t=Table([[cards[0],cards[1]],[cards[2],cards[3]]], colWidths=[91*mm,91*mm], hAlign='LEFT')
-    t.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'TOP'),('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(0,0),(-1,-1),0),('TOPPADDING',(0,0),(-1,-1),1.5*mm),('BOTTOMPADDING',(0,0),(-1,-1),1.5*mm)]))
-    return t
-
-
-def _transaction_table(rows, styles):
-    data=[[Paragraph('DATE',styles['table_head']),Paragraph('TRANSACTION TYPE',styles['table_head']),Paragraph('ACCOUNT',styles['table_head']),Paragraph('CREDIT (₹)',styles['table_head']),Paragraph('DEBIT (₹)',styles['table_head']),Paragraph('BALANCE (₹)',styles['table_head'])]]
-    for r in rows:
-        amt=float(r.get('amount',0) or 0)
-        bal=float(r.get('running_balance',0) or 0)
-        typ=str(r.get('type','Transaction')).replace('_',' ').title()
-        account=str(r.get('account','—')).title()
-        credit=Paragraph(f'+{amt:,.2f}',styles['credit']) if amt>0 else Paragraph('—',styles['table_right'])
-        debit=Paragraph(f'{abs(amt):,.2f}',styles['debit']) if amt<0 else Paragraph('—',styles['table_right'])
-        data.append([Paragraph(str(r.get('date',''))[:10],styles['table']),Paragraph(typ[:28],styles['table']),Paragraph(account[:18],styles['table']),credit,debit,Paragraph(f'{bal:,.2f}',styles['table_right'])])
-    t=Table(data,colWidths=[21*mm,46*mm,29*mm,27*mm,27*mm,36*mm],repeatRows=1,hAlign='LEFT')
+    """Formal, square-corner 2x2 financial summary table."""
+    cells = []
+    for idx, (label, value, kind) in enumerate(rows):
+        value_style = st['metric_green'] if kind == 'green' else st['metric_red'] if kind == 'red' else st['metric']
+        cell = Table([
+            [Paragraph(str(label).upper(), st['label'])],
+            [Paragraph(str(value), ParagraphStyle(
+                f'summaryValue{idx}', parent=value_style, fontSize=10.2, leading=13,
+            ))],
+        ], colWidths=[84*mm])
+        cell.setStyle(TableStyle([
+            ('VALIGN',(0,0),(-1,-1),'MIDDLE'), ('LEFTPADDING',(0,0),(-1,-1),0),
+            ('RIGHTPADDING',(0,0),(-1,-1),0), ('TOPPADDING',(0,0),(-1,-1),0.8*mm),
+            ('BOTTOMPADDING',(0,0),(-1,-1),0.8*mm),
+        ]))
+        cells.append(cell)
+    table_rows=[]
+    for i in range(0, len(cells), 2):
+        table_rows.append([cells[i], cells[i+1] if i+1 < len(cells) else ''])
+    t = Table(table_rows, colWidths=[93*mm, 93*mm], hAlign='LEFT')
     t.setStyle(TableStyle([
-        ('BACKGROUND',(0,0),(-1,0),NAVY_DARK),('TEXTCOLOR',(0,0),(-1,0),WHITE),
-        ('ROWBACKGROUNDS',(0,1),(-1,-1),[WHITE,colors.HexColor('#F4FAF8')]),
-        ('GRID',(0,0),(-1,-1),0.35,LINE),('VALIGN',(0,0),(-1,-1),'MIDDLE'),
-        ('LEFTPADDING',(0,0),(-1,-1),2.4*mm),('RIGHTPADDING',(0,0),(-1,-1),2.4*mm),
-        ('TOPPADDING',(0,0),(-1,-1),2.7*mm),('BOTTOMPADDING',(0,0),(-1,-1),2.7*mm),
+        ('BACKGROUND',(0,0),(-1,-1),WHITE), ('GRID',(0,0),(-1,-1),0.45,LINE),
+        ('VALIGN',(0,0),(-1,-1),'MIDDLE'), ('LEFTPADDING',(0,0),(-1,-1),4*mm),
+        ('RIGHTPADDING',(0,0),(-1,-1),4*mm), ('TOPPADDING',(0,0),(-1,-1),2.2*mm),
+        ('BOTTOMPADDING',(0,0),(-1,-1),2.2*mm),
     ]))
     return t
 
 
+def _transaction_description(row):
+    typ = str(row.get('type', 'Transaction')).replace('_', ' ').strip().title()
+    note = str(row.get('note') or row.get('remarks') or row.get('description') or '').strip()
+    if typ.lower() == 'expense allocation':
+        return f'Expense Allocation: {note}' if note else 'Expense Allocation'
+    if note and note.lower() not in {typ.lower(), 'transaction'}:
+        return f'{typ}: {note}'
+    if row.get('share_no'):
+        return f'{typ} · Share {row.get("share_no")}'
+    return typ
+
+
+def _short_reference(row):
+    raw = str(row.get('transaction_ref') or row.get('_id') or row.get('id') or '').strip()
+    if not raw:
+        return '—'
+    if len(raw) <= 17 and raw.upper().startswith('TXN-'):
+        return raw
+    suffix = raw[-8:].upper()
+    return f'TXN-...{suffix}'
+
+
+def _transaction_table(rows, styles):
+    data = [[
+        Paragraph('DATE', styles['table_head']),
+        Paragraph('DESCRIPTION / REMARKS', styles['table_head']),
+        Paragraph('REFERENCE', styles['table_head']),
+        Paragraph('CREDIT (₹)', styles['table_head']),
+        Paragraph('DEBIT (₹)', styles['table_head']),
+        Paragraph('BALANCE (₹)', styles['table_head']),
+    ]]
+    for r in rows:
+        amt = float(r.get('amount', 0) or 0)
+        bal = float(r.get('running_balance', 0) or 0)
+        description = _transaction_description(r)
+        credit = Paragraph(f'{amt:,.2f}', styles['credit']) if amt > 0 else Paragraph('—', styles['table_right'])
+        debit = Paragraph(f'{abs(amt):,.2f}', styles['debit']) if amt < 0 else Paragraph('—', styles['table_right'])
+        data.append([
+            Paragraph(str(r.get('date', ''))[:10], styles['table']),
+            Paragraph(escape(description)[:240], styles['table']),
+            Paragraph(_short_reference(r), styles['table']),
+            credit, debit, Paragraph(f'{bal:,.2f}', styles['table_right']),
+        ])
+    t = Table(data, colWidths=[19*mm, 69*mm, 25*mm, 23*mm, 23*mm, 23*mm], repeatRows=1, hAlign='LEFT')
+    t.setStyle(TableStyle([
+        ('BACKGROUND',(0,0),(-1,0),NAVY_DARK), ('TEXTCOLOR',(0,0),(-1,0),WHITE),
+        ('ROWBACKGROUNDS',(0,1),(-1,-1),[WHITE,colors.HexColor('#F8FAFC')]),
+        ('GRID',(0,0),(-1,-1),0.35,LINE), ('VALIGN',(0,0),(-1,-1),'MIDDLE'),
+        ('LEFTPADDING',(0,0),(-1,-1),2*mm), ('RIGHTPADDING',(0,0),(-1,-1),2*mm),
+        ('TOPPADDING',(0,0),(-1,-1),2.5*mm), ('BOTTOMPADDING',(0,0),(-1,-1),2.5*mm),
+    ]))
+    return t
+
+
+def _seal_circle(label='OFFICIAL SEAL', size=24*mm):
+    drawing = Drawing(size, size)
+    drawing.add(Circle(size/2, size/2, size/2-1.2, strokeColor=NAVY_DARK, strokeWidth=1.1, fillColor=WHITE))
+    drawing.add(Circle(size/2, size/2, size/2-3.5, strokeColor=LINE, strokeWidth=0.6, fillColor=None))
+    drawing.add(String(size/2, size/2-2, label, textAnchor='middle', fontName='Helvetica-Bold', fontSize=5.5, fillColor=NAVY_DARK))
+    return drawing
+
+
 def _notes_signature(tenant_name, styles):
-    notes = Table([[Paragraph('<font color="#0F766E"><b>ⓘ  Note</b></font><br/><br/>• This passbook shows transactions recorded for your SHG account.<br/>• Closing balance reflects the running account balance represented by the selected passbook.<br/>• Please contact your SHG group leader for any discrepancy.', styles['body'])]], colWidths=[103*mm], rowHeights=[30*mm])
-    notes.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),GREY_MINT),('BOX',(0,0),(-1,-1),0.6,LINE),('VALIGN',(0,0),(-1,-1),'TOP'),('LEFTPADDING',(0,0),(-1,-1),5*mm),('RIGHTPADDING',(0,0),(-1,-1),5*mm),('TOPPADDING',(0,0),(-1,-1),4*mm)]))
-    sig = Table([[Paragraph('<b>SHG</b>', ParagraphStyle('seal', parent=styles['title'], fontSize=13, alignment=TA_CENTER, textColor=NAVY_DARK))],[Paragraph('Authorized Signatory', styles['small'])],[Paragraph('SHG President / Secretary', styles['body'])]], colWidths=[72*mm], rowHeights=[11*mm,8*mm,8*mm])
-    sig.setStyle(TableStyle([('BOX',(0,0),(-1,-1),0.7,NAVY_DARK),('DASHED',(0,0),(-1,-1),1,3),('VALIGN',(0,0),(-1,-1),'MIDDLE'),('ALIGN',(0,0),(-1,-1),'CENTER'),('TOPPADDING',(0,0),(-1,-1),1*mm),('BOTTOMPADDING',(0,0),(-1,-1),1*mm)]))
-    wrap=Table([[notes,sig]], colWidths=[108*mm,78*mm])
-    wrap.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'TOP'),('LEFTPADDING',(0,0),(-1,-1),0),('RIGHTPADDING',(0,0),(-1,-1),0)]))
+    disclaimer_text = ('This statement reflects transactions recorded in Bharat Bachat for the selected member and period. '
+                       'Please verify the entries and report any discrepancy to the authorized group administrator.')
+    notes = Table([[Paragraph(f'<b>IMPORTANT INFORMATION</b><br/><br/>{disclaimer_text}', styles['body'])]], colWidths=[105*mm])
+    notes.setStyle(TableStyle([
+        ('BOX',(0,0),(-1,-1),0.7,LINE), ('VALIGN',(0,0),(-1,-1),'TOP'),
+        ('LEFTPADDING',(0,0),(-1,-1),4*mm), ('RIGHTPADDING',(0,0),(-1,-1),4*mm),
+        ('TOPPADDING',(0,0),(-1,-1),4*mm), ('BOTTOMPADDING',(0,0),(-1,-1),4*mm),
+    ]))
+    seal = _seal_circle()
+    sign = Table([
+        [seal],
+        [Paragraph('________________________', styles['body'])],
+        [Paragraph('<b>Authorized Signatory</b>', styles['small'])],
+        [Paragraph('SHG President / Secretary', styles['small'])],
+    ], colWidths=[76*mm], rowHeights=[27*mm, 6*mm, 6*mm, 6*mm])
+    sign.setStyle(TableStyle([
+        ('ALIGN',(0,0),(-1,-1),'CENTER'), ('VALIGN',(0,0),(-1,-1),'MIDDLE'),
+        ('LINEABOVE',(0,1),(-1,1),0.7,NAVY_DARK),
+        ('LEFTPADDING',(0,0),(-1,-1),2*mm), ('RIGHTPADDING',(0,0),(-1,-1),2*mm),
+        ('TOPPADDING',(0,0),(-1,-1),0), ('BOTTOMPADDING',(0,0),(-1,-1),0),
+    ]))
+    wrap = Table([[notes, sign]], colWidths=[108*mm, 78*mm])
+    wrap.setStyle(TableStyle([
+        ('VALIGN',(0,0),(-1,-1),'TOP'), ('LEFTPADDING',(0,0),(-1,-1),0),
+        ('RIGHTPADDING',(0,0),(-1,-1),0),
+    ]))
     return wrap
 
-
-def passbook_pdf(tenant_name, member_name, rows, logo_url=None, logo_bytes=None):
+def passbook_pdf(tenant_name, member_name, rows, logo_url=None, logo_bytes=None, opening_balance=0):
     buf, doc=_doc('Bharat Bachat Passbook Statement')
     st=_base_styles(); story=[]
     _header(story,tenant_name,member_name,logo_url,'SHG Passbook Statement',logo_bytes)
     credits=sum(float(r.get('amount',0) or 0) for r in rows if float(r.get('amount',0) or 0)>0)
     debits=-sum(float(r.get('amount',0) or 0) for r in rows if float(r.get('amount',0) or 0)<0)
-    closing=float(rows[-1].get('running_balance',0) or 0) if rows else 0
+    closing=float(rows[-1].get('running_balance',opening_balance) or 0) if rows else float(opening_balance or 0)
     story.append(_summary_grid([
-        ('Total Entries',str(len(rows)),'neutral'),
+        ('Opening Balance',_money(opening_balance),'neutral'),
         ('Total Credits',_money(credits),'green'),
         ('Total Debits',_money(debits),'red'),
         ('Closing Balance',_money(closing),'neutral'),
     ],st))
-    story += [Spacer(1,5*mm), Paragraph('Detailed Passbook',st['section']), Spacer(1,1*mm), _transaction_table(rows,st), Spacer(1,6*mm), _notes_signature(tenant_name,st)]
+    display_rows = list(rows)
+    if float(opening_balance or 0) != 0:
+        display_rows.insert(0, {'date':'—','type':'Opening Balance','note':'Base deposit / brought forward balance','amount':0,'running_balance':float(opening_balance),'transaction_ref':'OPENING'})
+    story += [Spacer(1,5*mm), Paragraph('Detailed Passbook',st['section']), Spacer(1,1*mm), _transaction_table(display_rows,st), Spacer(1,6*mm), _notes_signature(tenant_name,st)]
     doc.build(story,onFirstPage=_footer,onLaterPages=_footer)
     buf.seek(0); return buf
 
@@ -264,38 +348,126 @@ def receipt_pdf(tenant_name, member_name, amount, receipt_type, reference, date_
     buf.seek(0); return buf
 
 
-def receipt_bundle_pdf(tenant_name, member_name, rows, logo_url=None, logo_bytes=None):
-    # The receipt bundle intentionally uses the same passbook visual system so every PDF from the app feels like one product.
-    return passbook_pdf(tenant_name, member_name, rows, logo_url, logo_bytes)
+def receipt_bundle_pdf(tenant_name, member_name, rows, logo_url=None, logo_bytes=None, opening_balance=0):
+    # The receipt bundle intentionally uses the same formal passbook visual system.
+    return passbook_pdf(tenant_name, member_name, rows, logo_url, logo_bytes, opening_balance)
 
 
-def monthly_kist_statement_pdf(tenant_name, member_name, period, rows, logo_url=None, logo_bytes=None):
-    """Admin-only monthly collection statement, separate from the member passbook."""
-    buf, doc = _doc('Bharat Bachat Monthly Kist Statement')
+def monthly_kist_statement_pdf(tenant_name, member_name, period, rows, logo_url=None, logo_bytes=None,
+                              member_id='', active_shares=0, tenant_code=''):
+    """Formal corporate-style monthly member payment receipt/statement."""
+    buf, doc = _doc('Bharat Bachat Monthly Member Payment Receipt')
     st = _base_styles(); story = []
-    _header(story, tenant_name, member_name, logo_url, f'Monthly Kist Statement · {period}', logo_bytes)
+    generated = datetime.now().astimezone().strftime('%d %b %Y, %I:%M:%S %p %Z')
+    serial = f"BB-{str(tenant_code or 'FUND').upper()}-{str(period)}-{str(member_id)[-6:].upper()}"
+    group_logo = _logo_flowable(logo_url, 18, logo_bytes) or _brand_mark(st)
+    left_content = [
+        Paragraph(str(tenant_name or 'Bharat Bachat Group'), st['group']),
+        Paragraph('Self Help Group · Member Payment Statement', st['subtitle']),
+        Paragraph('Bharat Bachat Official Financial Record', st['small']),
+    ]
+    left = Table([[group_logo, left_content]], colWidths=[22*mm, 72*mm])
+    left.setStyle(TableStyle([
+        ('VALIGN',(0,0),(-1,-1),'MIDDLE'), ('LEFTPADDING',(0,0),(-1,-1),0),
+        ('RIGHTPADDING',(0,0),(-1,-1),2*mm), ('TOPPADDING',(0,0),(-1,-1),0),
+        ('BOTTOMPADDING',(0,0),(-1,-1),0),
+    ]))
+    right = Table([
+        [Paragraph('<b>OFFICIAL RECEIPT</b>', st['section'])],
+        [Paragraph(f'<b>Receipt Serial:</b> {serial}', st['small'])],
+        [Paragraph(f'<b>Generated:</b> {generated}', st['small'])],
+        [Paragraph(f'<b>Statement Month:</b> {period}', st['small'])],
+    ], colWidths=[82*mm])
+    right.setStyle(TableStyle([
+        ('BOX',(0,0),(-1,-1),0.7,LINE), ('BACKGROUND',(0,0),(-1,0),GREY_SOFT),
+        ('LEFTPADDING',(0,0),(-1,-1),4*mm), ('RIGHTPADDING',(0,0),(-1,-1),3*mm),
+        ('TOPPADDING',(0,0),(-1,-1),2.2*mm), ('BOTTOMPADDING',(0,0),(-1,-1),2.2*mm),
+        ('VALIGN',(0,0),(-1,-1),'MIDDLE'),
+    ]))
+    header = Table([[left, right]], colWidths=[98*mm, 88*mm])
+    header.setStyle(TableStyle([
+        ('VALIGN',(0,0),(-1,-1),'TOP'), ('LEFTPADDING',(0,0),(-1,-1),0),
+        ('RIGHTPADDING',(0,0),(-1,-1),0), ('TOPPADDING',(0,0),(-1,-1),0),
+        ('BOTTOMPADDING',(0,0),(-1,-1),0),
+    ]))
+    story += [header, Spacer(1, 3*mm)]
+    rule = Table([['']], colWidths=[186*mm], rowHeights=[1.2*mm])
+    rule.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),TEAL)]))
+    story += [rule, Spacer(1, 4*mm)]
+
+    metadata = Table([
+        [Paragraph('<b>MEMBER NAME</b>', st['label']), Paragraph(str(member_name or '—'), st['body']),
+         Paragraph('<b>MEMBER ID</b>', st['label']), Paragraph(str(member_id or '—'), st['body'])],
+        [Paragraph('<b>ACTIVE SHARES</b>', st['label']), Paragraph(str(active_shares), st['body']),
+         Paragraph('<b>FUND / GROUP</b>', st['label']), Paragraph(str(tenant_name or '—'), st['body'])],
+    ], colWidths=[29*mm, 60*mm, 26*mm, 71*mm])
+    metadata.setStyle(TableStyle([
+        ('BOX',(0,0),(-1,-1),0.6,LINE), ('INNERGRID',(0,0),(-1,-1),0.35,LINE),
+        ('VALIGN',(0,0),(-1,-1),'MIDDLE'), ('BACKGROUND',(0,0),(0,-1),GREY_SOFT),
+        ('BACKGROUND',(2,0),(2,-1),GREY_SOFT), ('LEFTPADDING',(0,0),(-1,-1),3*mm),
+        ('RIGHTPADDING',(0,0),(-1,-1),3*mm), ('TOPPADDING',(0,0),(-1,-1),3*mm),
+        ('BOTTOMPADDING',(0,0),(-1,-1),3*mm),
+    ]))
+    story += [metadata, Spacer(1, 5*mm), Paragraph('Itemized Member Transactions', st['section'])]
     def amount(v): return f'₹ {float(v or 0):,.2f}'
-    total = sum(float(r.get('amount', 0) or 0) for r in rows if float(r.get('amount', 0) or 0) > 0)
-    story.append(_summary_grid([('Statement Month', str(period), 'neutral'), ('Total Collected', amount(total), 'green'), ('Transactions', str(len(rows)), 'neutral'), ('Member', member_name or '—', 'neutral')], st))
-    story += [Spacer(1, 5*mm), Paragraph('Itemized Monthly Transactions', st['section']), Spacer(1, 2*mm)]
-    data = [[Paragraph('DATE', st['table_head']), Paragraph('DETAILS', st['table_head']), Paragraph('TRANSACTION REF', st['table_head']), Paragraph('AMOUNT (₹)', st['table_head'])]]
+    total = sum(float(r.get('amount', 0) or 0) for r in rows)
+    data = [[Paragraph('DATE', st['table_head']), Paragraph('DESCRIPTION', st['table_head']),
+             Paragraph('REF', st['table_head']), Paragraph('AMOUNT', st['table_head'])]]
     for r in rows:
         typ = str(r.get('statement_label') or r.get('type', 'Transaction')).replace('_', ' ').title()
         if r.get('type') == 'loan_repayment':
             principal = float(r.get('principal_paid', r.get('principal', 0)) or 0)
             interest = float(r.get('loan_interest_collected', r.get('interest', 0)) or 0)
-            detail = f'{typ} (Principal {amount(principal)} + Interest {amount(interest)})'
-        else: detail = typ
-        ref = str(r.get('transaction_ref') or r.get('_id') or '—')
-        data.append([Paragraph(str(r.get('date', ''))[:10], st['table']), Paragraph(detail[:100], st['table']), Paragraph(ref[:36], st['table']), Paragraph(amount(r.get('amount', 0)), st['table_right'])])
-    table = Table(data, colWidths=[24*mm, 76*mm, 45*mm, 35*mm], repeatRows=1)
-    table.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,0),NAVY_DARK),('TEXTCOLOR',(0,0),(-1,0),WHITE),('ROWBACKGROUNDS',(0,1),(-1,-1),[WHITE,GREY_MINT]),('GRID',(0,0),(-1,-1),0.35,LINE),('VALIGN',(0,0),(-1,-1),'MIDDLE'),('LEFTPADDING',(0,0),(-1,-1),2.5*mm),('RIGHTPADDING',(0,0),(-1,-1),2.5*mm),('TOPPADDING',(0,0),(-1,-1),3*mm),('BOTTOMPADDING',(0,0),(-1,-1),3*mm)]))
-    story += [table, Spacer(1, 8*mm)]
-    total_box = Table([[Paragraph('<b>TOTAL AMOUNT COLLECTED FOR THE MONTH</b>', st['label']), Paragraph(f'<b>{amount(total)}</b>', st['metric_green'])]], colWidths=[120*mm,60*mm])
-    total_box.setStyle(TableStyle([('BACKGROUND',(0,0),(-1,-1),GREEN_SOFT),('BOX',(0,0),(-1,-1),0.8,LINE),('VALIGN',(0,0),(-1,-1),'MIDDLE'),('LEFTPADDING',(0,0),(-1,-1),4*mm),('RIGHTPADDING',(0,0),(-1,-1),4*mm),('TOPPADDING',(0,0),(-1,-1),5*mm),('BOTTOMPADDING',(0,0),(-1,-1),5*mm)]))
-    story += [total_box, Spacer(1, 18*mm)]
-    sig = Table([[Paragraph('Admin Signature: __________________________________', st['body'])],[Paragraph(f'{tenant_name} · Authorized Group Administrator', st['small'])]], colWidths=[100*mm])
-    sig.setStyle(TableStyle([('VALIGN',(0,0),(-1,-1),'MIDDLE'),('TOPPADDING',(0,0),(-1,-1),2*mm),('BOTTOMPADDING',(0,0),(-1,-1),2*mm)]))
-    story.append(sig)
+            detail = f'{typ} · Principal {amount(principal)} + Interest {amount(interest)}'
+        else:
+            note = str(r.get('note') or r.get('remarks') or '').strip()
+            detail = f'{typ}: {note}' if note else typ
+        ref = _short_reference(r)
+        data.append([
+            Paragraph(str(r.get('date', ''))[:10], st['table']),
+            Paragraph(escape(detail)[:160], st['table']),
+            Paragraph(ref, st['table']),
+            Paragraph(amount(r.get('amount', 0)), st['table_right']),
+        ])
+    table = Table(data, colWidths=[24*mm, 84*mm, 40*mm, 38*mm], repeatRows=1)
+    table.setStyle(TableStyle([
+        ('BACKGROUND',(0,0),(-1,0),NAVY_DARK), ('ROWBACKGROUNDS',(0,1),(-1,-1),[WHITE,GREY_MINT]),
+        ('GRID',(0,0),(-1,-1),0.35,LINE), ('VALIGN',(0,0),(-1,-1),'MIDDLE'),
+        ('LEFTPADDING',(0,0),(-1,-1),2.3*mm), ('RIGHTPADDING',(0,0),(-1,-1),2.3*mm),
+        ('TOPPADDING',(0,0),(-1,-1),2.6*mm), ('BOTTOMPADDING',(0,0),(-1,-1),2.6*mm),
+    ]))
+    story += [table, Spacer(1, 4*mm)]
+    summary = Table([
+        [Paragraph('<b>TOTAL AMOUNT COLLECTED</b>', st['label']), Paragraph(f'<b>{amount(total)}</b>', st['metric_green'])],
+    ], colWidths=[125*mm, 61*mm])
+    summary.setStyle(TableStyle([
+        ('BOX',(0,0),(-1,-1),0.7,LINE), ('BACKGROUND',(0,0),(-1,-1),GREY_SOFT),
+        ('VALIGN',(0,0),(-1,-1),'MIDDLE'), ('ALIGN',(1,0),(1,0),'RIGHT'),
+        ('LEFTPADDING',(0,0),(-1,-1),4*mm), ('RIGHTPADDING',(0,0),(-1,-1),4*mm),
+        ('TOPPADDING',(0,0),(-1,-1),4*mm), ('BOTTOMPADDING',(0,0),(-1,-1),4*mm),
+    ]))
+    story += [summary, Spacer(1, 7*mm)]
+    disclaimer = Table([[Paragraph(
+        '<b>DISCLAIMER</b> · This is a system-generated statement based on entries recorded in Bharat Bachat. '
+        'Please verify the details and contact the authorized group administrator if any discrepancy is found.', st['small'])]], colWidths=[186*mm])
+    disclaimer.setStyle(TableStyle([
+        ('BOX',(0,0),(-1,-1),0.65,LINE), ('LEFTPADDING',(0,0),(-1,-1),3*mm),
+        ('RIGHTPADDING',(0,0),(-1,-1),3*mm), ('TOPPADDING',(0,0),(-1,-1),2.5*mm),
+        ('BOTTOMPADDING',(0,0),(-1,-1),2.5*mm),
+    ]))
+    seal = _seal_circle('OFFICIAL SEAL', 25*mm)
+    sign = Table([
+        [Paragraph('<b>For Shri Sawariy Shet Ji BC Fund</b>', st['body']), seal],
+        [Paragraph('Authorized Signatory: __________________________', st['small']), ''],
+        [Paragraph('Name / Designation: ____________________________', st['small']), ''],
+    ], colWidths=[132*mm, 54*mm])
+    sign.setStyle(TableStyle([
+        ('BOX',(0,0),(-1,-1),0.7,LINE), ('VALIGN',(0,0),(-1,-1),'MIDDLE'),
+        ('SPAN',(1,0),(1,2)), ('ALIGN',(1,0),(1,2),'CENTER'),
+        ('LEFTPADDING',(0,0),(-1,-1),4*mm), ('RIGHTPADDING',(0,0),(-1,-1),4*mm),
+        ('TOPPADDING',(0,0),(-1,-1),2.5*mm), ('BOTTOMPADDING',(0,0),(-1,-1),2.5*mm),
+    ]))
+    story += [disclaimer, Spacer(1, 4*mm), sign]
     doc.build(story, onFirstPage=_footer, onLaterPages=_footer)
     buf.seek(0); return buf
+

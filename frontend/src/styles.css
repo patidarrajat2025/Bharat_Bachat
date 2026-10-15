@@ -3295,3 +3295,12 @@ button,.btn-primary,.btn-secondary,.input,textarea,select{font-size:15px}
 .kist-receipt-actions{display:flex;gap:8px;flex-wrap:wrap;padding:10px 14px 14px;border-top:1px solid var(--ui-line)}
 .kist-receipt-actions button{display:inline-flex;align-items:center;gap:6px}
 @media(max-width:420px){.kist-status-grid{gap:6px!important}.kist-status-card{padding:8px 6px!important;min-height:88px!important}.kist-status-card strong{font-size:clamp(10px,3vw,13px)!important}.kist-status-card small{font-size:8px!important}.kist-drill-amount{width:100%;margin-left:0}}
+
+/* Member drill-down receipt actions: keep both actions on one responsive row. */
+.kist-receipt-actions{display:flex;flex-direction:row;align-items:center;justify-content:space-between;gap:10px;flex-wrap:nowrap}
+.kist-receipt-actions button{flex:1 1 0;min-width:0;max-width:50%;justify-content:center;padding:9px 8px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:11px;line-height:1.2}
+.kist-receipt-actions button svg{flex:0 0 auto;width:14px;height:14px}
+.kist-receipt-actions button span{display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.vault-account-card.vault-card-disabled{cursor:not-allowed;opacity:.88}
+.vault-account-card.vault-card-disabled .vault-card-arrow{visibility:hidden}
+@media(max-width:380px){.kist-receipt-actions{gap:6px}.kist-receipt-actions button{padding:8px 5px;font-size:10px;gap:4px}}

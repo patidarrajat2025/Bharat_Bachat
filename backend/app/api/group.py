@@ -2484,45 +2484,39 @@ async def delete_expense_proof(tenant_id:str,expense_id:str,user=Depends(admin_u
 async def passbook(tenant_id:str,member_id:str,from_date:date|None=None,to_date:date|None=None,share_no:int|None=None,account:str|None=None,book:str|None=None,page:int=1,page_size:int=10,user=Depends(current_user)):
     await tenant_guard(user,tenant_id)
     if user["role"]=="member" and str(user.get("member_id"))!=member_id: raise HTTPException(403,"Member access denied")
-    await get_member(get_db(),tenant_id,member_id); db=get_db(); q={"tenant_id":tenant_id,"member_id":member_id}
-    if from_date or to_date:
-        q["date"]={}
-        if from_date:q["date"]["$gte"]=datetime.combine(from_date,datetime.min.time(),tzinfo=timezone.utc)
-        if to_date:q["date"]["$lte"]=datetime.combine(to_date,datetime.max.time(),tzinfo=timezone.utc)
+    member=await get_member(get_db(),tenant_id,member_id); db=get_db(); q={"tenant_id":tenant_id,"member_id":member_id}
     if share_no:q["share_no"]=share_no
     if account:q["account"]=account
     if book=="expense":q["type"]="expense_allocation"
     elif book in ("bank","cash"):q["account"]=book
+    # Calculate every row in chronological order, applying positive credits
+    # before negative debits on the same calendar day. Then paginate newest-first
+    # for the existing activity UI while preserving each row's true balance.
+    history_q=dict(q)
+    all_rows=await db.transactions.find(history_q).to_list(100000)
+    all_rows.sort(key=lambda r:(str(r.get("date") or r.get("created_at") or "")[:10], 0 if float(r.get("amount",0) or 0)>=0 else 1, str(r.get("created_at") or r.get("date") or ""), str(r.get("_id") or "")))
+    balance_minor=to_minor(member.get("opening_balance",member.get("opening_deposit",0)) or 0)
+    chronological=[]
+    for row in all_rows:
+        amount_minor=_doc_amount_minor(row)
+        balance_minor += amount_minor
+        d=row.get("date")
+        if from_date and d and d.date()<from_date: continue
+        if to_date and d and d.date()>to_date: continue
+        item=serialize(row)
+        item["amount"]=float(from_minor(amount_minor))
+        item["running_balance"]=float(from_minor(balance_minor))
+        chronological.append(item)
+    chronological.reverse()
     page=max(1,page); page_size=max(1,min(page_size,50)); skip=(page-1)*page_size
-    sort=[("date",-1),("created_at",-1),("_id",-1)]
-    rows=await db.transactions.find(q).sort(sort).skip(skip).limit(page_size).to_list(page_size)
-    if not rows: return []
-    # Running balance is server-authoritative and page-independent.  Compute the
-    # complete filtered sum plus the amount belonging to records newer than the
-    # first row on this page; then walk this page from newest to oldest.
-    total_rows=await db.transactions.aggregate([{"$match":q},{"$group":{"_id":None,"total":{"$sum":{"$convert":{"input":{"$ifNull":["$amount",0]},"to":"double","onError":0,"onNull":0}}},"count":{"$sum":1}}}]).to_list(1)
-    total=float((total_rows[0] if total_rows else {}).get("total",0) or 0)
-    first=rows[0]; newer=0.0
-    if skip>0:
-        fd=first.get("date"); fc=first.get("created_at"); fid=first.get("_id")
-        newer_q={"$or":[]}
-        if fd is not None:newer_q["$or"].append({"date":{"$gt":fd}})
-        if fd is not None and fc is not None:newer_q["$or"].append({"date":fd,"created_at":{"$gt":fc}})
-        if fd is not None and fc is not None:newer_q["$or"].append({"date":fd,"created_at":fc,"_id":{"$gt":fid}})
-        if newer_q["$or"]:
-            newer_rows=await db.transactions.aggregate([{"$match":{**q,**newer_q}},{"$group":{"_id":None,"total":{"$sum":{"$convert":{"input":{"$ifNull":["$amount",0]},"to":"double","onError":0,"onNull":0}}}}}]).to_list(1)
-            newer=float((newer_rows[0] if newer_rows else {}).get("total",0) or 0)
-    balance=round(total-newer,2); out=[]
-    for row in rows:
-        x=serialize(row); amount=float(row.get("amount",0) or 0); balance=round(balance,2); x["running_balance"]=balance; out.append(x); balance=round(balance-amount,2)
-    return out
+    return chronological[skip:skip+page_size]
 
 @router.get("/{tenant_id}/passbook-summary/{member_id}")
 async def passbook_summary(tenant_id:str,member_id:str,from_date:date|None=None,to_date:date|None=None,share_no:int|None=None,account:str|None=None,book:str|None=None,user=Depends(current_user)):
     """Summary is calculated independently of the paginated transaction feed."""
     await tenant_guard(user,tenant_id)
     if user["role"]=="member" and str(user.get("member_id"))!=member_id: raise HTTPException(403,"Member access denied")
-    await get_member(get_db(),tenant_id,member_id); db=get_db(); q={"tenant_id":tenant_id,"member_id":member_id}
+    member=await get_member(get_db(),tenant_id,member_id); db=get_db(); q={"tenant_id":tenant_id,"member_id":member_id}
     if from_date or to_date:
         q["date"]={}
         if from_date:q["date"]["$gte"]=datetime.combine(from_date,datetime.min.time(),tzinfo=timezone.utc)
@@ -2533,11 +2527,11 @@ async def passbook_summary(tenant_id:str,member_id:str,from_date:date|None=None,
     elif book in ("bank","cash"):q["account"]=book
     agg=await db.transactions.aggregate([{"$match":q},{"$group":{"_id":None,"credits":{"$sum":{"$cond":[{"$gt":[{"$convert":{"input":{"$ifNull":["$amount",0]},"to":"double","onError":0,"onNull":0}},0]},{"$convert":{"input":{"$ifNull":["$amount",0]},"to":"double","onError":0,"onNull":0}},0]}},"debits":{"$sum":{"$cond":[{"$lt":[{"$convert":{"input":{"$ifNull":["$amount",0]},"to":"double","onError":0,"onNull":0}},0]},{"$abs":{"$convert":{"input":{"$ifNull":["$amount",0]},"to":"double","onError":0,"onNull":0}}},0]}},"net":{"$sum":{"$convert":{"input":{"$ifNull":["$amount",0]},"to":"double","onError":0,"onNull":0}}},"count":{"$sum":1}}}]).to_list(1)
     row=agg[0] if agg else {}
-    opening=0.0
+    opening=float(member.get("opening_balance",member.get("opening_deposit",0)) or 0)
     if from_date:
         before=dict(q); before.pop("date",None); before["date"]={"$lt":datetime.combine(from_date,datetime.min.time(),tzinfo=timezone.utc)}
         before_row=await db.transactions.aggregate([{"$match":before},{"$group":{"_id":None,"net":{"$sum":{"$convert":{"input":{"$ifNull":["$amount",0]},"to":"double","onError":0,"onNull":0}}}}}]).to_list(1)
-        opening=float((before_row[0] if before_row else {}).get("net",0) or 0)
+        opening += float((before_row[0] if before_row else {}).get("net",0) or 0)
     net=float(row.get("net",0) or 0)
     return {"opening_balance":round(opening,2),"total_credits":round(float(row.get("credits",0) or 0),2),"total_debits":round(float(row.get("debits",0) or 0),2),"closing_balance":round(opening+net,2),"transaction_count":int(row.get("count",0) or 0)}
 
