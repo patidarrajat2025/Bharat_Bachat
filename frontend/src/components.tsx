@@ -111,7 +111,7 @@ export function Layout({children}:{children:ReactNode}){
   const secondary=visible.filter(x=>!primary.some(p=>p[0]===x[0]));
   const active=visible.find(x=>loc.pathname===x[0] || (x[0] !== '/dashboard' && loc.pathname.startsWith(`${x[0]}/`)));
   useEffect(()=>{setMore(false);setProfile(false)},[loc.pathname,loc.search]);
-  useEffect(()=>{let timer:number|undefined;const h=(e:Event)=>{const d=(e as CustomEvent).detail;window.clearTimeout(timer);setToast({message:String(d?.message||''),type:d?.type==='error'?'error':d?.type==='info'?'info':'success'});timer=window.setTimeout(()=>setToast(null),d?.type==='error'?5000:3200)};window.addEventListener('bb-toast',h);return()=>{window.clearTimeout(timer);window.removeEventListener('bb-toast',h)}},[]);
+  useEffect(()=>{let timer:number|undefined;const h=(e:Event)=>{const d=(e as CustomEvent).detail;window.clearTimeout(timer);setToast({message:String(d?.message||''),type:d?.type==='error'?'error':d?.type==='info'?'info':'success'});timer=window.setTimeout(()=>setToast(null),1000)};window.addEventListener('bb-toast',h);return()=>{window.clearTimeout(timer);window.removeEventListener('bb-toast',h)}},[]);
   useEffect(()=>{
     if(!profile)return;
     const close=(event:PointerEvent)=>{const target=event.target as Node|null;if(profileRef.current&&!profileRef.current.contains(target))setProfile(false)};
@@ -169,13 +169,13 @@ export function Layout({children}:{children:ReactNode}){
 
     {notifOpen&&<div className="notification-overlay" onMouseDown={e=>{if(e.target===e.currentTarget)closeNotifications()}}><div className="notification-panel"><div className="notification-head"><div><b>{tr('Notifications')}</b><span>{notifications.length} {tr('entries')}</span></div><button className="icon-btn" onClick={closeNotifications}><X size={18}/></button></div><div className="notification-list">{notifications.map((n:any)=><div className={`notification-item ${n.read?'read':''}`} key={n._id}><div><b>{trDynamic(n.title)}</b><p>{trDynamic(n.body)}</p><small>{n.created_at?new Date(n.created_at).toLocaleString(appLocale()):''}</small></div><button className="notification-delete" onClick={async()=>{try{if(user?.tenant_id)await api.deleteNotification(user.tenant_id,n._id);setNotifications(x=>x.filter(v=>v._id!==n._id));setUnread(x=>Math.max(0,x-(n.read?0:1)))}catch{}}}><X size={15}/></button></div>)}{!notifications.length&&<div className="empty-state">{tr('No data yet')}</div>}</div></div></div>}
     {settings&&<Modal title={tr('Settings')} onClose={()=>setSettings(false)}><ThemeSettings onDone={()=>setSettings(false)}/></Modal>}
-    {toast&&<div className={`bb-toast bb-toast-${toast.type}`} role={toast.type==='error'?'alert':'status'} aria-live={toast.type==='error'?'assertive':'polite'}><span className="bb-toast-icon" aria-hidden="true">{toast.type==='success'?'✓':toast.type==='error'?'!':'i'}</span><span>{toast.message}</span><button type="button" className="bb-toast-close" aria-label={tr('Close')} onClick={()=>setToast(null)}>×</button></div>}
+    {toast&&<div className={`bb-toast bb-toast-${toast.type}`} role={toast.type==='error'?'alert':'status'} aria-live={toast.type==='error'?'assertive':'polite'}><span className="bb-toast-icon" aria-hidden="true">{toast.type==='success'?'✓':toast.type==='error'?'!':'i'}</span><span>{toast.message}</span></div>}
     {more&&<div className="mobile-more-overlay" onClick={()=>setMore(false)}>
       <div className="mobile-more-sheet safe-bottom" onClick={e=>e.stopPropagation()}>
         <div className="sheet-handle"/>
         <div className="sheet-head"><div><b>{t('more')}</b><span>{tenant?.name||''}</span></div><button type="button" className="icon-btn" onClick={()=>setMore(false)}><X size={19}/></button></div>
         <div className="more-grid">
-          {secondary.map(([to,label,Icon])=><Link key={to} to={to} className={`more-item ${loc.pathname===to || (to!=='/dashboard' && loc.pathname.startsWith(`${to}/`))?'is-active':''}`}><Icon size={21}/><span>{t(label)}</span></Link>)}{['group_admin','admin'].includes(String(user?.role||''))&&<Link to="/admin?tab=settings" className={`more-item ${loc.pathname==='/admin'&&new URLSearchParams(loc.search).get('tab')==='settings'?'is-active':''}`}><Settings size={21}/><span>{tr('Loan & Kist Settings')}</span></Link>}{!['group_admin','admin'].includes(String(user?.role||''))&&<button type="button" className="more-item" onClick={()=>{setMore(false);setSettings(true)}}><Settings size={21}/><span>{tr('Settings')}</span></button>}
+          {secondary.map(([to,label,Icon])=><Link key={to} to={to} className={`more-item ${loc.pathname===to || (to!=='/dashboard' && loc.pathname.startsWith(`${to}/`))?'is-active':''}`}><Icon size={21}/><span>{t(label)}</span></Link>)}<Link to="/formulas" className={`more-item ${loc.pathname==='/formulas'?'is-active':''}`}><FileText size={21}/><span>{tr('Formulas')}</span></Link>{['group_admin','admin'].includes(String(user?.role||''))&&<Link to="/admin?tab=settings" className={`more-item ${loc.pathname==='/admin'&&new URLSearchParams(loc.search).get('tab')==='settings'?'is-active':''}`}><Settings size={21}/><span>{tr('Loan & Kist Settings')}</span></Link>}{!['group_admin','admin'].includes(String(user?.role||''))&&<button type="button" className="more-item" onClick={()=>{setMore(false);setSettings(true)}}><Settings size={21}/><span>{tr('Settings')}</span></button>}
         </div>
       </div>
     </div>}
@@ -241,7 +241,7 @@ export function Modal({title,onClose,children}:{title:string;onClose:()=>void;ch
 export function ErrorBox({error,onClose}:{error:string;onClose?:()=>void}){
   const [dismissed,setDismissed]=useState(false);
   useEffect(()=>setDismissed(false),[error]);
+  useEffect(()=>{if(!error)return;const timer=window.setTimeout(()=>{setDismissed(true);onClose?.()},1000);return()=>window.clearTimeout(timer)},[error,onClose]);
   if(!error||dismissed)return null;
-  const close=()=>{setDismissed(true);onClose?.()};
-  return <div className="error-banner" role="alert"><div className="error-content"><span className="error-dot"/><span>{trError(error)}</span></div><button type="button" className="error-close" aria-label={tr("Close")} onClick={close}><X size={17}/></button></div>;
+  return <div className="error-banner" role="alert"><div className="error-content"><span className="error-dot"/><span>{trError(error)}</span></div></div>;
 }

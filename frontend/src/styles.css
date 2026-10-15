@@ -3091,7 +3091,16 @@ button,.btn-primary,.btn-secondary,.input,textarea,select{font-size:15px}
 @media(max-width:520px){.drill-summary-grid{grid-template-columns:1fr 1fr}.kist-member-row>summary{padding:12px}.kist-member-total{gap:5px}.kist-member-total strong{font-size:14px}.kist-share-line{grid-template-columns:1fr auto;}.kist-share-line>span:last-child{grid-column:2;grid-row:1}.loan-slider-value{font-size:18px}}
 
 /* In-modal confirmation must remain visible above the modal backdrop. */
-.success-banner{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:12px 14px;border:1px solid #b7e4c7;border-radius:14px;background:#ecfdf3;color:#166534;font-size:13px;font-weight:750;line-height:1.45;margin-bottom:12px}.success-banner .error-close{position:static;flex:0 0 auto;color:#166534}
+.success-banner{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:12px 14px;border:1px solid #b7e4c7;border-radius:14px;background:#ecfdf3;color:#166534;font-size:13px;font-weight:750;line-height:1.45;margin-bottom:12px;animation:bb-notice-out .18s ease 1s forwards}.success-banner .error-close{display:none}
+@keyframes bb-notice-out{to{opacity:0;visibility:hidden;max-height:0;margin:0;padding-top:0;padding-bottom:0;overflow:hidden}}
+
+/* Keep the bulk collection actions together on every screen size. */
+.bulk-summary-cards + .flex.flex-wrap.gap-2{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr));width:100%}.bulk-summary-cards + .flex.flex-wrap.gap-2 .btn-secondary{min-width:0;justify-content:center}
+
+/* Kist collection states remain comparable side-by-side on mobile. */
+@media(max-width:760px){.kist-status-grid{grid-template-columns:repeat(3,minmax(0,1fr))!important}.kist-status-card{min-width:0;padding:11px 8px;min-height:96px}.kist-status-card strong{font-size:16px}.kist-status-card small{font-size:9px}}
+
+.formula-guide{display:grid;gap:10px}.formula-guide-row{display:grid;grid-template-columns:34px minmax(0,1fr);gap:12px;padding:15px;border:1px solid #dce9e3;border-radius:17px;background:#fff}.formula-guide-row>b{width:30px;height:30px;display:grid;place-items:center;border-radius:50%;background:#e8f7ee;color:#087443;font-size:13px}.formula-guide-row h2{margin:0;color:#1a2b4c;font-size:14px}.formula-guide-row p{margin:5px 0 0;color:#64748b;font-size:12px;line-height:1.55}
 
 
 /* Header identity belongs to Bharat Bachat only; group identity is shown in the vault card. */
