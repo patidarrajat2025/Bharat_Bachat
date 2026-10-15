@@ -581,14 +581,25 @@ async def member_details(tenant_id:str,member_id:str,user=Depends(current_user))
         raise HTTPException(403,"Member access denied")
     db=get_db()
     member=await get_member(db,tenant_id,member_id)
-    member_row, shares_row, passbook_row, loans_row, summary_row = await asyncio.gather(
+    async def share_ledger_summaries():
+        # Use the complete source ledger for lifetime share totals; the UI's
+        # passbook is intentionally paginated and must not drive savings totals.
+        return await db.transactions.aggregate([
+            {"$match":{"tenant_id":tenant_id,"member_id":member_id,"share_id":{"$exists":True,"$nin":[None,""]}}},
+            {"$group":{"_id":"$share_id",
+                "total_savings":{"$sum":{"$cond":[{"$or":[{"$eq":["$type","contribution"]},{"$and":[{"$eq":["$type","reversal"]},{"$eq":["$original_type","contribution"]}]}]},_mongo_amount_minor_expr(),0]}},
+                "transaction_count":{"$sum":1}}},
+        ]).to_list(None)
+    member_row, shares_row, passbook_row, loans_row, summary_row, share_summary_rows = await asyncio.gather(
         asyncio.sleep(0,result=serialize(member)),
         ensure_member_shares(member),
         passbook(tenant_id,member_id,page=1,page_size=10,user=user),
         loans(tenant_id,member_id,user=user),
         tenant_summary(tenant_id,member_id),
+        share_ledger_summaries(),
     )
-    return {"member":member_row,"shares":[serialize(x) for x in shares_row],"passbook":passbook_row,"passbook_has_more":len(passbook_row)==10,"loans":loans_row,"summary":summary_row}
+    share_summaries={str(x.get("_id")): {"total_savings":float(from_minor(int(x.get("total_savings",0) or 0))),"transaction_count":int(x.get("transaction_count",0) or 0)} for x in share_summary_rows}
+    return {"member":member_row,"shares":[serialize(x) for x in shares_row],"passbook":passbook_row,"passbook_has_more":len(passbook_row)==10,"loans":loans_row,"summary":summary_row,"share_summaries":share_summaries}
 
 @router.get("/{tenant_id}/members/{member_id}/activity")
 async def member_activity(tenant_id:str,member_id:str,page:int=1,page_size:int=10,user=Depends(current_user)):
@@ -994,7 +1005,7 @@ async def monthly_kist_status(tenant_id:str,member_id:str,period:str,user=Depend
     return {"member_id":member_id,"period":period,"kist_per_share":expected,"shares":out,"expected_total":float(from_minor(expected_total_minor)),"paid_total":float(from_minor(paid_total_minor)),"remaining_total":float(from_minor(remaining_total_minor))}
 
 @router.get("/{tenant_id}/monthly-kist-bulk-status")
-async def monthly_kist_bulk_status(tenant_id: str, period: str, user=Depends(admin_user)):
+async def monthly_kist_bulk_status(tenant_id: str, period: str, page: int = 1, page_size: int = 10, search: str = "", user=Depends(admin_user)):
     await tenant_guard(user, tenant_id); db=get_db()
     tenant=await db.tenants.find_one({"_id":parse_oid(tenant_id)})
     if not tenant: raise HTTPException(404,"Group not found")
@@ -1004,7 +1015,14 @@ async def monthly_kist_bulk_status(tenant_id: str, period: str, user=Depends(adm
     except Exception: raise HTTPException(400,"Invalid period")
     end=datetime(y+1,1,1,tzinfo=timezone.utc) if m==12 else datetime(y,m+1,1,tzinfo=timezone.utc)
     expected_minor=to_minor(tenant.get("kist_per_share",500)); expected=float(from_minor(expected_minor))
-    members=await db.members.find({"tenant_id":tenant_id,"active":True}).sort("first_name",1).to_list(5000)
+    page=max(1,int(page or 1)); page_size=max(1,min(int(page_size or 10),5000))
+    member_query={"tenant_id":tenant_id,"active":True}
+    if search.strip():
+        import re
+        pattern=re.compile(re.escape(search.strip()),re.IGNORECASE)
+        member_query["$or"]=[{"first_name":pattern},{"last_name":pattern},{"phone":pattern},{"member_code":pattern}]
+    total_members=await db.members.count_documents(member_query)
+    members=await db.members.find(member_query).sort([("first_name",1),("_id",1)]).skip((page-1)*page_size).limit(page_size).to_list(page_size)
     member_ids=[str(m["_id"]) for m in members]
     shares=await db.shares.find({"tenant_id":tenant_id,"member_id":{"$in":member_ids},"status":"active"}).sort("share_no",1).to_list(20000) if member_ids else []
     shares_by_member={mid:[] for mid in member_ids}
@@ -1036,7 +1054,7 @@ async def monthly_kist_bulk_status(tenant_id: str, period: str, user=Depends(adm
     collected=[x for x in out if x["status"]=="paid"]
     pending=[x for x in out if x["status"]=="pending"]
     partial=[x for x in out if x["status"]=="partial"]
-    return {"period":period,"kist_per_share":expected,"members":out,"collected":collected,"pending":pending,"partial":partial,"total_collected":round(sum(x["paid_total"] for x in collected),2),"total_pending":round(sum(x["remaining_total"] for x in pending),2),"total_partial":round(sum(x["paid_total"] for x in partial),2)}
+    return {"period":period,"kist_per_share":expected,"members":out,"total_members":total_members,"page":page,"page_size":page_size,"has_more":page*page_size<total_members,"collected":collected,"pending":pending,"partial":partial,"total_collected":round(sum(x["paid_total"] for x in collected),2),"total_pending":round(sum(x["remaining_total"] for x in pending),2),"total_partial":round(sum(x["paid_total"] for x in partial),2)}
 
 @router.post("/{tenant_id}/monthly-kist-bulk")
 async def monthly_kist_bulk(tenant_id: str, body: BulkMonthlyKistCreate, user=Depends(admin_user)):
@@ -2290,6 +2308,16 @@ async def ensure_expense_allocations(tenant_id:str,expense_doc):
     await acquire_operation_lock(lock_key,300)
     try:
         current=await db.expenses.find_one({"_id":expense_doc["_id"],"tenant_id":tenant_id}) or expense_doc
+        # Repair legacy duplicate derived rows on every idempotent finalization,
+        # including expenses whose allocation plan was already persisted.
+        existing_allocations=await db.transactions.find({"tenant_id":tenant_id,"expense_id":eid,"type":"expense_allocation"}).sort([("created_at",1),("_id",1)]).to_list(10000)
+        seen_allocations=set()
+        for allocation in existing_allocations:
+            allocation_key=str(allocation.get("share_id") or f"{allocation.get('member_id')}:{allocation.get('share_no')}")
+            if allocation_key in seen_allocations:
+                await db.transactions.delete_one({"_id":allocation["_id"],"tenant_id":tenant_id,"type":"expense_allocation"})
+                continue
+            seen_allocations.add(allocation_key)
         plan=current.get("allocation_plan")
         if not isinstance(plan,list):
             # Recover old partial allocations first. Their share IDs are evidence
@@ -2298,15 +2326,6 @@ async def ensure_expense_allocations(tenant_id:str,expense_doc):
             existing_allocations=await db.transactions.find({"tenant_id":tenant_id,"expense_id":eid,"type":"expense_allocation"}).sort([("created_at",1),("_id",1)]).to_list(10000)
             shares=await db.shares.find({"tenant_id":tenant_id,"status":"active"}).sort([("share_no",1),("_id",1)]).to_list(10000)
             plan_by_id={str(sh["_id"]):{"share_id":str(sh["_id"]),"member_id":str(sh["member_id"]),"share_no":int(sh.get("share_no",0) or 0)} for sh in shares}
-            # These rows are derived allocations, not cash movements. Remove
-            # duplicate child rows for the same share before normalizing them.
-            seen_allocations=set()
-            for allocation in existing_allocations:
-                allocation_key=str(allocation.get("share_id") or f"{allocation.get('member_id')}:{allocation.get('share_no')}")
-                if allocation_key in seen_allocations:
-                    await db.transactions.delete_one({"_id":allocation["_id"],"tenant_id":tenant_id,"type":"expense_allocation"})
-                    continue
-                seen_allocations.add(allocation_key)
             for allocation in existing_allocations:
                 sid=str(allocation.get("share_id") or "")
                 if sid and sid not in plan_by_id and allocation.get("member_id"):

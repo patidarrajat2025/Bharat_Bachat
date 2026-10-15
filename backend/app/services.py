@@ -241,9 +241,12 @@ async def tenant_summary(tenant_id: str, member_id: str | None = None):
     # cash/bank balances only; expenses are reported separately, not deducted from profit.
     profit_income_minor = int(canonical_profit["net_profit_minor"])
     profit_income = profit_income_minor / 100
-    # Keep BC principal collections independent from earned profit. Expenses are
-    # charged to the collected group contribution pool, never to profit.
-    bc_fund = float(tx.get("regular_contributions", 0) or 0) - exp_total
+    # Total BC Fund is a cumulative earned-and-collected group metric. Expenses
+    # affect the cash/bank vault only; they must never reduce this cumulative fund.
+    # Keep regular kist, all interest, and all penalties sourced from canonical
+    # transaction classifications to avoid parallel formulas drifting apart.
+    total_interest_income = interest + loan_interest_income + other_interest_income
+    bc_fund = float(tx.get("regular_contributions", 0) or 0) + total_interest_income + penalties
 
     cash = opening_cash + float(tx.get("cash_inflow", 0) or 0) - float(tx.get("cash_outflow_tx", 0) or 0) - float(exp.get("cash", 0) or 0)
     bank = opening_bank + float(tx.get("bank_inflow", 0) or 0) - float(tx.get("bank_outflow_tx", 0) or 0) - float(exp.get("bank", 0) or 0)
@@ -264,6 +267,9 @@ async def tenant_summary(tenant_id: str, member_id: str | None = None):
         "vault_balance": net_group_vault,
         "net_group_vault": net_group_vault,
         "total_bc_fund": round(bc_fund, 2),
+        "total_bc_kist": round(float(tx.get("regular_contributions", 0) or 0), 2),
+        "total_interest_income": round(total_interest_income, 2),
+        "total_penalty_income": round(penalties, 2),
         "active_account_balance": net_group_vault,
         "cash_balance": round(cash, 2),
         "bank_balance": round(bank, 2),

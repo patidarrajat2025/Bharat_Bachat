@@ -168,7 +168,7 @@ export const api={
  monthlyKistSummary:(tid:string,period:string)=>request<any>(`/group/${tid}/monthly-kist-summary?period=${encodeURIComponent(period)}`),
  monthlyKistStatus:(tid:string,mid:string,period:string)=>request<any>(`/group/${tid}/monthly-kist/${mid}?period=${encodeURIComponent(period)}`),
  monthlyKist:(tid:string,b:any)=>request<any>(`/group/${tid}/monthly-kist`,{method:'POST',body:JSON.stringify(withIdempotency(b))}),
- monthlyKistBulkStatus:(tid:string,period:string)=>request<any>(`/group/${tid}/monthly-kist-bulk-status?period=${encodeURIComponent(period)}`),
+ monthlyKistBulkStatus:(tid:string,period:string,page=1,pageSize=10,search='')=>request<any>(`/group/${tid}/monthly-kist-bulk-status?period=${encodeURIComponent(period)}&page=${page}&page_size=${pageSize}&search=${encodeURIComponent(search)}`),
  monthlyKistBulk:(tid:string,b:any)=>request<any>(`/group/${tid}/monthly-kist-bulk`,{method:'POST',body:JSON.stringify(withIdempotency(b))}),
  moneyIn:(tid:string,b:any)=>request<any>(`/group/${tid}/money-in`,{method:'POST',body:JSON.stringify(withIdempotency(b))}),
  loans:(tid:string,memberId?:string)=>request<Loan[]>(`/group/${tid}/loans${memberId?`?member_id=${encodeURIComponent(memberId)}`:''}`),

@@ -2615,10 +2615,10 @@ button,.btn-primary,.btn-secondary,.input,textarea,select{font-size:15px}
   margin-top:8px!important;
 }
 
-/* Member Savings & Shares: Expenses + Profits are a true 2x2 pair. */
+/* Member Savings & Shares: compact three-card summary row. */
 .member-savings-summary-grid{
   display:grid;
-  grid-template-columns:repeat(2,minmax(0,1fr));
+  grid-template-columns:repeat(3,minmax(0,1fr));
   gap:10px;
 }
 .member-savings-summary-grid .metric-tile{
@@ -2835,7 +2835,7 @@ button,.btn-primary,.btn-secondary,.input,textarea,select{font-size:15px}
     font-size:16px!important;
   }
   .member-savings-summary-grid{
-    grid-template-columns:1fr 1fr!important;
+    grid-template-columns:repeat(3,minmax(0,1fr))!important;
   }
   .member-savings-summary-grid .metric-tile{
     min-height:82px!important;
@@ -2927,11 +2927,13 @@ button,.btn-primary,.btn-secondary,.input,textarea,select{font-size:15px}
   line-height:1.1!important;
 }
 
-/* Savings & Shares: Expenses and Profits remain a clean 2-column pair. */
-.member-savings-summary-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:10px!important}
-.member-savings-summary-grid .metric-tile{min-height:88px!important;padding:13px!important}
-.member-savings-summary-grid .metric-tile span{font-size:12px!important;line-height:1.2!important}
-.member-savings-summary-grid .metric-tile strong{font-size:19px!important;line-height:1.15!important}
+/* Savings & Shares: three equal-width summary cards, including total BC Kist. */
+.member-savings-summary-grid{grid-template-columns:repeat(3,minmax(0,1fr))!important;gap:8px!important}
+.member-savings-summary-grid .metric-tile{min-width:0;min-height:88px!important;padding:10px 8px!important;overflow:hidden}
+.member-savings-summary-grid .metric-tile span{font-size:clamp(9px,2.5vw,12px)!important;line-height:1.2!important;overflow-wrap:anywhere}
+.member-savings-summary-grid .metric-tile strong{font-size:clamp(12px,3.5vw,19px)!important;line-height:1.15!important;overflow-wrap:anywhere}
+.member-savings-summary-grid .metric-kist-share{background:#EFF6FF!important;border-color:#BFDBFE!important}
+.member-savings-summary-grid .metric-kist-share span,.member-savings-summary-grid .metric-kist-share strong{color:#1D4ED8!important}
 
 /* Reconciliation summary cards: semantic colors + readable amounts. */
 .reconciliation-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:12px!important}
