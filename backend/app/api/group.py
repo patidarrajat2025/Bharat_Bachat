@@ -1801,12 +1801,25 @@ async def ledger_overview(tenant_id:str,user=Depends(admin_user)):
         {"$group":{"_id":"$member_id","savings":{"$sum":{"$convert":{"input":{"$ifNull":["$amount",0]},"to":"double","onError":0,"onNull":0}}},"transactions":{"$sum":1}}}
     ]).to_list(None) if member_ids else []
     loan_rows=await db.loans.find({"tenant_id":tenant_id,"member_id":{"$in":member_ids}}).sort("created_at",-1).to_list(5000) if member_ids else []
+    now=datetime.now(timezone.utc)
     loan_by_member={}
     for loan in loan_rows:
         if loan.get("status")!="active": continue
         mid=str(loan.get("member_id")); bucket=loan_by_member.setdefault(mid,{"principal":0.0,"interest":0.0,"loans":0})
-        bucket["principal"]+=max(0,float(loan.get("principal",0) or 0)-float(loan.get("principal_paid",0) or 0))
-        bucket["interest"]+=max(0,float(loan.get("interest_accrued",loan.get("expected_interest",0)) or 0)-float(loan.get("interest_paid",0) or 0))
+        principal_remaining=max(0,float(loan.get("principal",0) or 0)-float(loan.get("principal_paid",0) or 0))
+        bucket["principal"]+=principal_remaining
+        # Dashboard due is accrued for elapsed months, never the full future-tenure interest.
+        start_value=loan.get("start_date") or loan.get("created_at") or now
+        if isinstance(start_value, str):
+            try: start_value=datetime.fromisoformat(start_value.replace("Z", "+00:00"))
+            except Exception: start_value=now
+        if isinstance(start_value, date) and not isinstance(start_value, datetime):
+            start_value=datetime.combine(start_value, datetime.min.time(), tzinfo=timezone.utc)
+        if getattr(start_value, "tzinfo", None) is None: start_value=start_value.replace(tzinfo=timezone.utc)
+        elapsed=max(1,min(int(loan.get("months",1) or 1),(now.year-start_value.year)*12+now.month-start_value.month+1))
+        rate=float(loan.get("interest_rate", 2) or 0)
+        accrued=round(principal_remaining*rate*elapsed)/100
+        bucket["interest"]+=max(0,accrued-float(loan.get("interest_paid",0) or 0))
         bucket["loans"]+=1
     contrib_by_member={str(x["_id"]):x for x in contribution_rows}
     now=datetime.now(timezone.utc); month_start=datetime(now.year,now.month,1,tzinfo=timezone.utc); month_end=datetime(now.year+1,1,1,tzinfo=timezone.utc) if now.month==12 else datetime(now.year,now.month+1,1,tzinfo=timezone.utc)
