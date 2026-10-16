@@ -178,6 +178,7 @@ export const api={
  loanPayment:(tid:string,b:any)=>request<any>(`/group/${tid}/loan-payments`,{method:'POST',body:JSON.stringify(withIdempotency(b))}),
  loanRequests:(tid:string)=>request<any[]>(`/group/${tid}/loan-requests`),
  createLoanRequest:(tid:string,b:any)=>request<any>(`/group/${tid}/loan-requests`,{method:'POST',body:JSON.stringify(withIdempotency(b))}),
+ uploadLoanRequestDocuments:(tid:string,rid:string,files:{aadhaar?:File|null;passbook?:File|null;income_proof?:File|null})=>{const fd=new FormData();for(const [k,v] of Object.entries(files))if(v)fd.append(k,v);return request<any>(`/group/${tid}/loan-requests/${rid}/documents`,{method:'POST',body:fd})},
  decideLoanRequest:(tid:string,rid:string,b:any)=>request<any>(`/group/${tid}/loan-requests/${rid}`,{method:'PATCH',body:JSON.stringify(b)}),
  expenses:(tid:string)=>request<any[]>(`/group/${tid}/expenses`),
  expensesPage:(tid:string,page=1,pageSize=10)=>request<any>(`/group/${tid}/expenses?page=${page}&page_size=${pageSize}`),

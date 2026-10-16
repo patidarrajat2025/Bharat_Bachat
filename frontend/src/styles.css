@@ -3304,3 +3304,27 @@ button,.btn-primary,.btn-secondary,.input,textarea,select{font-size:15px}
 .vault-account-card.vault-card-disabled{cursor:not-allowed;opacity:.88}
 .vault-account-card.vault-card-disabled .vault-card-arrow{visibility:hidden}
 @media(max-width:380px){.kist-receipt-actions{gap:6px}.kist-receipt-actions button{padding:8px 5px;font-size:10px;gap:4px}}
+
+/* Bharat Bachat Loan Module — 2026 workflow refinements */
+.loan-request-tabs{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;padding:5px;border:1px solid #dbe6e1;border-radius:14px;background:#f7faf8}
+.loan-request-tabs button{min-width:0;padding:9px 6px;border:0;border-radius:10px;background:transparent;color:#536570;font-size:12px;font-weight:850;text-transform:capitalize}
+.loan-request-tabs button.active{background:#286847;color:#fff;box-shadow:0 3px 9px #28684724}
+.loan-wizard-steps{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;margin:0 0 18px}
+.loan-wizard-steps span{padding:10px 6px;border-radius:11px;border:1px solid #dce6e2;background:#f8faf9;color:#728079;text-align:center;font-size:11px;font-weight:850}
+.loan-wizard-steps span.active{background:#e7f5ed;border-color:#8cc9a7;color:#145c3b}
+.loan-wizard-steps span.complete{background:#edf4fb;border-color:#c9dced;color:#17324D}
+.loan-document-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.loan-document-grid label{display:grid;gap:8px;min-width:0;padding:12px;border:1px solid #dce8e2;border-radius:13px;background:#fbfdfc;color:#17324D;font-size:12px;font-weight:850}
+.loan-document-grid input{width:100%;min-width:0;font-size:10px}
+.loan-document-grid small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#728079;font-weight:600}
+.loan-review-panel{padding:15px;border:1px solid #c9e5d5;border-radius:15px;background:#f0faf4;color:#17324D}
+.loan-review-panel h3{margin:0 0 10px;font-size:14px;font-weight:900}
+.loan-review-panel p{display:flex;justify-content:space-between;gap:12px;margin:7px 0;font-size:12px;color:#52656d}
+.loan-review-panel b{color:#17324D;text-align:right}
+.loan-application-success{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;margin:12px 0;padding:14px 16px;border:1px solid #a8d8bc;border-radius:15px;background:#effaf3;color:#145c3b}
+.loan-application-success span{font-size:12px;font-weight:750}
+.loan-application-success button{border:0;background:transparent;color:#145c3b;font-size:20px}
+.loan-document-status{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.loan-document-status span{padding:5px 8px;border-radius:999px;background:#f0f5f2;color:#52656d;font-size:10px;font-weight:800}
+.loan-document-status span.uploaded{background:#e4f7eb;color:#146c43}
+@media(max-width:600px){.loan-document-grid{grid-template-columns:1fr}.loan-request-tabs button{font-size:10px;padding:8px 3px}.loan-wizard-steps span{font-size:9px;padding:9px 3px}.loan-review-panel p{font-size:11px}}

@@ -2268,6 +2268,45 @@ async def _loan_request_rows(tenant_id:str,user,personal_only:bool=False):
         x["approval_records"]=x.get("approval_records",x.get("loan_approval_records",[])); x["approval_count"]=len(x["approval_records"]); x["required_admin_approvals"]=required
     return [serialize(x) for x in rows]
 
+@router.post("/{tenant_id}/loan-requests/{request_id}/documents")
+async def upload_loan_request_documents(
+    tenant_id: str,
+    request_id: str,
+    aadhaar: UploadFile | None = File(default=None),
+    passbook: UploadFile | None = File(default=None),
+    income_proof: UploadFile | None = File(default=None),
+    user=Depends(current_user),
+):
+    """Upload application evidence, scoped to the applicant or tenant admin."""
+    await tenant_guard(user, tenant_id)
+    db = get_db()
+    request_doc = await db.loan_requests.find_one({"_id": parse_oid(request_id), "tenant_id": tenant_id})
+    if not request_doc:
+        raise HTTPException(404, "Loan application not found")
+    if user.get("role") == "member" and str(request_doc.get("member_id")) != str(user.get("member_id") or ""):
+        raise HTTPException(403, "You can only upload documents for your own application")
+    uploaded = {}
+    for field, file in (("aadhaar", aadhaar), ("passbook", passbook), ("income_proof", income_proof)):
+        if not file or not file.filename:
+            continue
+        content = await file.read()
+        if not content:
+            continue
+        if len(content) > 8 * 1024 * 1024:
+            raise HTTPException(413, f"{field} file must be 8 MB or smaller")
+        content_type = (file.content_type or "application/octet-stream").lower()
+        if content_type not in ("application/pdf", "image/jpeg", "image/png", "image/webp"):
+            raise HTTPException(415, "Only PDF, JPEG, PNG, or WebP documents are supported")
+        try:
+            asset = upload_bytes(content, f"loan-{request_id}-{field}", f"bharat-bachat/{tenant_id}/loan-documents", "raw" if content_type == "application/pdf" else "image")
+        except Exception as exc:
+            raise HTTPException(503, "Document storage is unavailable; configure document storage and retry") from exc
+        uploaded[field] = {"url": asset.get("secure_url"), "public_id": asset.get("public_id"), "filename": file.filename[:180], "content_type": content_type, "size": len(content), "status": "uploaded", "uploaded_at": datetime.now(timezone.utc)}
+    if uploaded:
+        await db.loan_requests.update_one({"_id": request_doc["_id"], "tenant_id": tenant_id}, {"$set": {f"documents.{key}": value for key, value in uploaded.items()}})
+        await audit(tenant_id, user, "LOAN_DOCUMENTS_UPLOADED", "loan_request", request_id, {"document_types": sorted(uploaded)})
+    return {"ok": True, "documents": {key: {k: v for k, v in value.items() if k != "public_id"} for key, value in uploaded.items()}}
+
 @router.get("/{tenant_id}/loan-requests")
 async def loan_requests(tenant_id:str,user=Depends(current_user)):
     return await _loan_request_rows(tenant_id,user)
