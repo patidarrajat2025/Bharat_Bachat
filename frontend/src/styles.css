@@ -3328,3 +3328,45 @@ button,.btn-primary,.btn-secondary,.input,textarea,select{font-size:15px}
 .loan-document-status span{padding:5px 8px;border-radius:999px;background:#f0f5f2;color:#52656d;font-size:10px;font-weight:800}
 .loan-document-status span.uploaded{background:#e4f7eb;color:#146c43}
 @media(max-width:600px){.loan-document-grid{grid-template-columns:1fr}.loan-request-tabs button{font-size:10px;padding:8px 3px}.loan-wizard-steps span{font-size:9px;padding:9px 3px}.loan-review-panel p{font-size:11px}}
+
+/* Mobile header title fit: keep the complete Bharat Bachat brand visible. */
+.header-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 100%;
+}
+.header-app-title {
+  display: block;
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: none;
+  overflow: visible;
+  text-overflow: clip;
+  white-space: nowrap;
+  font-size: clamp(12px, 3.6vw, 16px);
+  line-height: 1.15;
+  letter-spacing: -0.025em;
+}
+.header-actions {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  gap: 5px;
+}
+@media (max-width: 420px) {
+  .app-header-inner { gap: 6px; padding-left: 9px; padding-right: 9px; }
+  .header-brand { gap: 6px; }
+  .header-brand .brand-mark { width: 34px; height: 34px; flex: 0 0 34px; }
+  .header-app-title { font-size: clamp(11px, 3.5vw, 14px); letter-spacing: -0.035em; }
+  .header-actions { gap: 3px; }
+  .header-icon-btn, .profile-trigger { width: 36px; min-width: 36px; height: 38px; padding: 0; }
+  .profile-trigger .profile-name, .profile-trigger > svg:last-child { display: none; }
+}
+@media (max-width: 350px) {
+  .header-app-title { font-size: 11px; }
+  .header-brand .brand-mark { width: 31px; height: 31px; flex-basis: 31px; }
+  .app-header-inner { gap: 4px; padding-left: 7px; padding-right: 7px; }
+}
