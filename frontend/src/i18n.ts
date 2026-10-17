@@ -86,7 +86,10 @@ export const currentLanguage = () => i18n.language === 'hi' ? 'hi' : 'en';
 const hiFallback=(value:string)=>{
   let text=String(value??'');
   const words:Record<string,string>={active:'सक्रिय',inactive:'निष्क्रिय',pending:'लंबित',partial:'आंशिक',paid:'जमा',approved:'स्वीकृत',rejected:'अस्वीकृत',closed:'बंद',loan:'ऋण',loans:'ऋण',member:'सदस्य',members:'सदस्य',share:'शेयर',shares:'शेयर',interest:'ब्याज',penalty:'जुर्माना',expense:'खर्च',expenses:'खर्च',profit:'लाभ',principal:'मूलधन',payment:'भुगतान',payments:'भुगतान',repayment:'वापसी',repayments:'वापसी',amount:'राशि',balance:'शेष',account:'खाता',cash:'नकद',bank:'बैंक',date:'तारीख',time:'समय',status:'स्थिति',type:'प्रकार',note:'नोट',reason:'कारण',total:'कुल',opening:'शुरुआती',closing:'अंतिम',credit:'जमा',credits:'जमा',debit:'निकासी',debits:'निकासी',inflow:'आवक',inflows:'आवक',outflow:'जावक',outflows:'जावक',active_account:'सक्रिय खाता',dashboard:'डैशबोर्ड',history:'इतिहास',settings:'सेटिंग',save:'सहेजें',select:'चुनें',open:'खोलें',view:'देखें',create:'बनाएँ',new:'नया',edit:'संपादित करें',delete:'हटाएँ',group:'समूह',admin:'एडमिन',admins:'एडमिन',super:'सुपर',system:'सिस्टम',record:'रिकॉर्ड',records:'रिकॉर्ड',request:'अनुरोध',requests:'अनुरोध',due:'देय',remaining:'बाकी',days:'दिन',months:'महीने',month:'महीना',year:'वर्ष',years:'वर्ष',today:'आज',tomorrow:'कल',available:'उपलब्ध',expected:'अपेक्षित',phone:'फोन',email:'ईमेल',name:'नाम',description:'विवरण',category:'श्रेणी',purpose:'उद्देश्य'};
-  text=text.replace(/\b[A-Za-z][A-Za-z_/-]*\b/g,m=>words[m.toLowerCase()]||'अन्य');
+  // Never replace an unknown English word with 'अन्य'. That created misleading labels
+  // such as 'अन्य अन्य अन्य' across dashboard cards. Translate only known terms and
+  // preserve unknown product/member/category names until an exact translation is added.
+  text=text.replace(/\b[A-Za-z][A-Za-z_/-]*\b/g,m=>words[m.toLowerCase()]||m);
   return text;
 };
 export const tr = (key:string) => i18n.language==='hi' ? (hi[key] ?? hiFallback(key)) : i18n.t(key, { defaultValue:key });
@@ -414,3 +417,43 @@ Object.assign(en,{
 });
 i18n.addResourceBundle('hi','translation',hi,true,true);
 i18n.addResourceBundle('en','translation',en,true,true);
+
+
+// Hindi UX polish: use everyday banking Hindi rather than literal/duplicated labels.
+Object.assign(hi, {
+  "Group Vault":"समूह निधि", "Group total":"समूह का कुल", "My Share":"मेरा हिस्सा",
+  "My share":"मेरा हिस्सा", "Group Total":"समूह का कुल", "Group Active Account Balance":"समूह खाते में उपलब्ध राशि",
+  "Active Account Balance":"खाते में उपलब्ध राशि", "Cash + Bank available balance":"नकद और बैंक में उपलब्ध कुल राशि",
+  "Cash Deposit":"नकद जमा", "Bank Deposit":"बैंक में जमा राशि", "Cash-in-Hand":"हाथ में नकद",
+  "Bank Balance":"बैंक में शेष राशि", "Total Vault Balance":"समूह निधि की कुल राशि",
+  "Group Profit":"समूह की कमाई", "Profits":"लाभ", "My Profit":"मेरे हिस्से का लाभ",
+  "My Expenses":"मेरे हिस्से का खर्च", "Expenses":"खर्च", "Expense":"खर्च",
+  "My Total Savings":"मेरी कुल बचत", "My Total Value":"मेरी कुल राशि",
+  "My Active Balance":"मेरे खाते में उपलब्ध राशि", "My Total BC Kist":"मेरी कुल जमा किस्तें",
+  "My Regular BC Kist":"मेरी नियमित जमा किस्तें", "Regular BC Kist + my earned profit share":"मेरी जमा किस्तें और मेरे हिस्से का लाभ",
+  "Regular BC Kist + interest + my profit share":"मेरी जमा किस्तें, ब्याज और मेरे हिस्से का लाभ",
+  "Total regular BC installments":"अब तक जमा नियमित किस्तें", "Total regular installments paid":"अब तक जमा नियमित किस्तें",
+  "Total savings minus my allocated expenses":"कुल बचत में से मेरे हिस्से का खर्च घटाकर",
+  "Group expenses allocated by active shares":"सक्रिय शेयरों के अनुसार बाँटा गया समूह खर्च",
+  "Group profit allocated by active shares":"सक्रिय शेयरों के अनुसार बाँटा गया समूह लाभ",
+  "Earned interest & penalties":"वसूला गया ब्याज और जुर्माना", "Interest + penalties earned":"वसूला गया ब्याज और जुर्माना",
+  "Borrowers currently active":"वर्तमान में चल रहे ऋण", "Active Loans":"चल रहे ऋण", "Loan repayments":"ऋण की किस्तें",
+  "Pending Interest":"बाकी ब्याज", "Interest Due":"जमा किया जाना बाकी ब्याज", "Principal Remaining":"बाकी मूलधन",
+  "Principal Paid":"जमा मूलधन", "Interest Paid":"जमा ब्याज", "Interest repayment":"ब्याज भुगतान की प्रगति",
+  "Next EMI Due":"अगली ऋण किस्त की तारीख", "My Loan Tracker":"मेरे ऋण की जानकारी",
+  "Personal financial view":"मेरी वित्तीय जानकारी", "Share view":"हिस्से की जानकारी",
+  "Group Dashboard":"समूह डैशबोर्ड", "Dashboard":"डैशबोर्ड", "Quick Actions":"ज़रूरी काम",
+  "Recent Activity":"हाल की गतिविधियाँ", "Financial Register":"वित्तीय रजिस्टर", "Member Ledger":"सदस्य का हिसाब",
+  "Personal Passbook":"मेरी पासबुक", "Passbook":"पासबुक", "Financial overview":"वित्तीय जानकारी",
+  "Other":"अन्य", "Other Expense":"अन्य खर्च", "Other Expenses":"अन्य खर्च",
+  "BC Regular Kist":"नियमित बीसी किस्त", "Kist This Month":"इस महीने की किस्त",
+  "Collected":"जमा हो चुका", "Pending":"बाकी", "Partial":"कुछ राशि जमा", "Paid":"जमा",
+  "Active":"चालू", "Inactive":"बंद", "Closed Loan":"बंद ऋण", "Active Loan":"चालू ऋण",
+  "Member":"सदस्य", "Members":"सदस्य", "Group":"समूह", "Account":"खाता",
+  "Available balance":"उपलब्ध राशि", "Balance":"शेष राशि", "Opening Balance":"शुरुआती राशि",
+  "Closing Balance":"अंतिम राशि", "Money received":"जमा हुई राशि", "Money paid":"भुगतान की गई राशि",
+  "Payment":"भुगतान", "Repayment":"ऋण भुगतान", "Loan":"ऋण", "Loans":"ऋण",
+  "Admin Control":"प्रबंधन", "Admin Control & Audit":"प्रबंधन और जाँच", "Admin":"व्यवस्थापक",
+  "Logout":"लॉग आउट", "Language":"भाषा", "Choose app language":"ऐप की भाषा चुनें"
+});
+i18n.addResourceBundle('hi','translation',hi,true,true);
