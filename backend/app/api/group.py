@@ -1314,7 +1314,7 @@ async def monthly_kist_bulk(tenant_id: str, body: BulkMonthlyKistCreate, user=De
         # Shares are individually locked above. Post independent allocations concurrently
         # with a bounded fan-out so network latency does not accumulate 50 times.
         # Keep a moderate cap to avoid saturating the Mongo connection pool.
-        post_semaphore = asyncio.Semaphore(20)
+        post_semaphore = asyncio.Semaphore(32)
 
         async def post_one_allocation(entry, allocation):
             async with post_semaphore:
@@ -1395,7 +1395,7 @@ async def monthly_kist_bulk(tenant_id: str, body: BulkMonthlyKistCreate, user=De
 
     posting_seconds = perf_counter() - phase_started
     penalty_started = perf_counter()
-    penalty_semaphore = asyncio.Semaphore(12)
+    penalty_semaphore = asyncio.Semaphore(16)
     async def post_one_penalty(mid):
         async with penalty_semaphore:
             return await _post_bc_penalty_once(tenant_id, mid, body.period, dt, body.account, user, body.note, suppress_admin_notifications=True, suppress_notifications=True, suppress_transaction_audit=True, defer_completion=True, relations_prevalidated=True, timing_collector=stage_times)

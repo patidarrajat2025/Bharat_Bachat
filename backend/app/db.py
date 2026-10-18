@@ -1,4 +1,5 @@
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
+import os
 from bson import ObjectId
 from pymongo import UpdateOne
 from .core.config import settings
@@ -15,8 +16,11 @@ async def connect_db():
         serverSelectionTimeoutMS=5000,
         connectTimeoutMS=5000,
         socketTimeoutMS=15000,
-        maxPoolSize=20,
-        minPoolSize=2,
+        # Bulk Kist posts many independent, idempotent journal/feed operations.
+        # Keep pool sizing configurable for smaller MongoDB plans and tune the
+        # default above the old 20-connection ceiling that queued bulk writes.
+        maxPoolSize=max(20, min(100, int(os.getenv("MONGODB_MAX_POOL_SIZE", "50")))),
+        minPoolSize=max(2, min(20, int(os.getenv("MONGODB_MIN_POOL_SIZE", "5")))),
         appname="bharat-bachat-api",
     )
     await client.admin.command("ping")
