@@ -166,18 +166,51 @@ async def ensure_financial_feed_ready(tenant_id: str):
 
 def as_id(v): return str(v)
 
-async def acquire_operation_lock(operation_key: str, ttl_seconds: int = 30):
+async def acquire_operation_lock(operation_key: str, ttl_seconds: int = 30, *, cleanup_expired: bool = True):
     """Short-lived Mongo lock for money-changing operations.
     It prevents two admin requests from calculating the same balance/outstanding
     concurrently without requiring a multi-document transaction on every write.
     """
     db=get_db(); now=datetime.now(timezone.utc); expires=now+timedelta(seconds=ttl_seconds)
-    await db.operation_locks.delete_many({"operation_key":operation_key,"expires_at":{"$lte":now}})
+    if cleanup_expired:
+        await db.operation_locks.delete_many({"operation_key":operation_key,"expires_at":{"$lte":now}})
     try:
         await db.operation_locks.insert_one({"operation_key":operation_key,"created_at":now,"expires_at":expires})
     except Exception:
         raise HTTPException(409,"Another financial operation is already being processed. Please try again.")
     return operation_key
+
+async def acquire_operation_locks(operation_keys: list[str], ttl_seconds: int):
+    """Atomically reserve a set of operation keys with one Mongo bulk insert.
+
+    Unique operation_key index is the concurrency guard. A private token makes
+    partial-acquisition cleanup safe if insert_many encounters a conflicting key.
+    """
+    if not operation_keys:
+        return None
+    db = get_db()
+    now = datetime.now(timezone.utc)
+    expires = now + timedelta(seconds=ttl_seconds)
+    token = uuid.uuid4().hex
+    documents = [{"operation_key": key, "created_at": now, "expires_at": expires, "lock_token": token}
+                 for key in operation_keys]
+    try:
+        await db.operation_locks.insert_many(documents, ordered=False)
+    except Exception as exc:
+        # Remove only locks created by this request; never delete another
+        # request's lock when a unique-key collision happens.
+        await db.operation_locks.delete_many({"operation_key": {"$in": operation_keys}, "lock_token": token})
+        raise HTTPException(409, "Another financial operation is already being processed. Please try again.") from exc
+    return token
+
+async def release_operation_locks(operation_keys: list[str], token: str | None):
+    if not operation_keys or not token:
+        return
+    try:
+        await get_db().operation_locks.delete_many({"operation_key": {"$in": operation_keys}, "lock_token": token})
+    except Exception:
+        # TTL expiry is the recovery path if lock cleanup is temporarily unavailable.
+        pass
 
 async def release_operation_lock(operation_key: str):
     try: await get_db().operation_locks.delete_one({"operation_key":operation_key})
@@ -689,7 +722,7 @@ def _due_overdue_days(payment_dt:datetime, due_day:int, year:int|None=None, mont
     due=datetime(y,m,due_day,tzinfo=timezone.utc)
     return max(0,(payment_dt.date()-due.date()).days)
 
-async def _post_bc_penalty_once(tenant_id:str,member_id:str,period:str,payment_dt:datetime,account:str,user,note:str="", *, suppress_notifications:bool=False):
+async def _post_bc_penalty_once(tenant_id:str,member_id:str,period:str,payment_dt:datetime,account:str,user,note:str="", *, suppress_admin_notifications: bool = False, timing_collector: dict | None = None):
     db=get_db(); tenant=await group_settings(tenant_id)
     due_day=int(tenant.get("bc_due_date",10) or 10); per_day=float(tenant.get("bc_per_day_penalty",0) or 0)
     y,m=map(int,period.split("-")); overdue=_due_overdue_days(payment_dt,due_day,y,m)
@@ -699,16 +732,16 @@ async def _post_bc_penalty_once(tenant_id:str,member_id:str,period:str,payment_d
     key=f"bc:{tenant_id}:{member_id}:{period}"
     existing=await db.transactions.find_one({"tenant_id":tenant_id,"bc_penalty_key":key})
     if existing:
-        await _finalize_tx_side_effects(existing,user,suppress_notifications=suppress_notifications)
+        await _finalize_tx_side_effects(existing,user,suppress_admin_notifications=suppress_admin_notifications,timing_collector=timing_collector)
         return str(existing["_id"])
     try:
-        return await insert_tx(tenant_id,member_id,"penalty",amount,account,user,date=payment_dt,note=note or f"BC Kist late penalty: {chargeable_days} chargeable overdue day(s) after 10-day grace period",payment_category="bc",penalty_category="bc",bc_regular_kist_penalty=amount,overdue_days=overdue,chargeable_overdue_days=chargeable_days,grace_days=10,per_day_penalty=per_day,period=period,bc_penalty_key=key,suppress_notifications=suppress_notifications)
+        return await insert_tx(tenant_id,member_id,"penalty",amount,account,user,date=payment_dt,note=note or f"BC Kist late penalty: {chargeable_days} chargeable overdue day(s) after 10-day grace period",payment_category="bc",penalty_category="bc",bc_regular_kist_penalty=amount,overdue_days=overdue,chargeable_overdue_days=chargeable_days,grace_days=10,per_day_penalty=per_day,period=period,bc_penalty_key=key,_suppress_admin_notifications=suppress_admin_notifications,_timing_collector=timing_collector)
     except Exception:
         # A concurrent collector may have inserted the unique period penalty
         # between the lookup and insert. Reuse it and finish any pending effects.
         existing=await db.transactions.find_one({"tenant_id":tenant_id,"bc_penalty_key":key})
         if not existing: raise
-        await _finalize_tx_side_effects(existing,user,suppress_notifications=suppress_notifications)
+        await _finalize_tx_side_effects(existing,user,suppress_admin_notifications=suppress_admin_notifications,timing_collector=timing_collector)
         return str(existing["_id"])
 
 async def _feed_upsert(doc, *, source_type="transaction"):
@@ -784,33 +817,52 @@ async def _ensure_tx_journal(doc: dict):
                                      {"$set":{"journal_status":"posted"}})
 
 
-async def _finalize_tx_side_effects(doc: dict, user: dict, *, suppress_notifications: bool = False):
+async def _finalize_tx_side_effects(doc: dict, user: dict, *, suppress_admin_notifications: bool = False, timing_collector: dict | None = None):
     """Retry-safe completion after the source transaction is durable.
 
-    This outbox-like sequence is recoverable when a process dies between writes:
-    client retries hit the same idempotency key and resume the missing effects.
+    Independent, idempotent journal/feed/audit/notification writes run concurrently.
+    We await every side effect before returning and leave the transaction pending
+    if any failed, so an idempotent retry can repair it safely.
     """
     db = get_db()
     txid = str(doc["_id"])
     typ = str(doc.get("type", "transaction"))
-    # Journal, reporting projection and audit are independent, idempotent effects.
-    # Run them concurrently to avoid serial network round-trips for every payment.
-    await asyncio.gather(
-        _ensure_tx_journal(doc),
-        _feed_upsert(doc),
-        audit(doc["tenant_id"], user, f"{typ.upper()}_POSTED", "transaction", txid,
-              {"amount": doc.get("amount", 0)}, event_key=f"tx-posted:{txid}"),
-    )
     member_id = doc.get("member_id")
     created_at = doc.get("date") or doc.get("created_at") or datetime.now(timezone.utc)
-    if not suppress_notifications:
-        if member_id and typ != "expense_allocation":
-            await _create_notification(doc["tenant_id"], role="member", member_id=str(member_id), source_key=f"tx:{txid}:{member_id}", title="Account activity", body=f"{typ.replace('_',' ').title()} ₹{float(doc.get('amount',0) or 0):,.2f}.", created_at=created_at)
-        if user.get("role") in ("member", "group_admin") and typ != "expense_allocation":
-            await _create_notification(doc["tenant_id"], role="admin", source_key=f"admin-tx:{txid}", title="Group activity", body=f"{typ.replace('_',' ').title()} ₹{float(doc.get('amount',0) or 0):,.2f}.", created_at=created_at)
+
+    async def timed_stage(key: str, operation):
+        stage_started = perf_counter()
+        try:
+            return await operation
+        finally:
+            if timing_collector is not None:
+                timing_collector[key] = timing_collector.get(key, 0.0) + perf_counter() - stage_started
+
+    tasks = [
+        timed_stage("journal_s", _ensure_tx_journal(doc)),
+        timed_stage("feed_s", _feed_upsert(doc)),
+        timed_stage("audit_s", audit(doc["tenant_id"], user, f"{typ.upper()}_POSTED", "transaction", txid,
+                                      {"amount": doc.get("amount", 0)}, event_key=f"tx-posted:{txid}")),
+    ]
+    if member_id and typ != "expense_allocation":
+        tasks.append(timed_stage("notification_s", _create_notification(
+            doc["tenant_id"], role="member", member_id=str(member_id), source_key=f"tx:{txid}:{member_id}",
+            title="Account activity", body=f"{typ.replace('_',' ').title()} ₹{float(doc.get('amount',0) or 0):,.2f}.", created_at=created_at)))
+    if not suppress_admin_notifications and user.get("role") in ("member", "group_admin") and typ != "expense_allocation":
+        tasks.append(timed_stage("notification_s", _create_notification(
+            doc["tenant_id"], role="admin", source_key=f"admin-tx:{txid}", title="Group activity",
+            body=f"{typ.replace('_',' ').title()} ₹{float(doc.get('amount',0) or 0):,.2f}.", created_at=created_at)))
+    outcomes = await asyncio.gather(*tasks, return_exceptions=True)
+    failures = [outcome for outcome in outcomes if isinstance(outcome, BaseException)]
+    if failures:
+        raise failures[0]
+
     if typ == "reversal" and doc.get("original_type") == "loan_repayment":
         await _apply_loan_repayment_reversal_once(doc["tenant_id"], doc)
+    stage_started = perf_counter()
     await db.transactions.update_one({"_id":doc["_id"],"tenant_id":doc["tenant_id"]},{"$set":{"side_effects_status":"complete","side_effects_completed_at":datetime.now(timezone.utc)}})
+    if timing_collector is not None:
+        timing_collector["completion_s"] = timing_collector.get("completion_s", 0.0) + perf_counter() - stage_started
 
 
 async def _validate_tx_relations(tenant_id: str, member_id, extra: dict):
@@ -851,17 +903,16 @@ def _assert_idempotent_tx_matches(existing: dict, tenant_id: str, member_id, typ
 
 async def insert_tx(tenant_id,member_id,typ,amount,account,user,**extra):
     db=get_db(); now=datetime.now(timezone.utc); idem=extra.pop("idempotency_key",None)
-    suppress_notifications = bool(extra.pop("suppress_notifications", False))
-    relations_prevalidated = bool(extra.pop("relations_prevalidated", False))
+    suppress_admin_notifications = bool(extra.pop("_suppress_admin_notifications", False))
+    timing_collector = extra.pop("_timing_collector", None)
     amount_minor = to_minor(amount or 0)
     idempotency_minor = int(extra.get("idempotency_amount_minor", amount_minor))
-    if not relations_prevalidated:
-        await _validate_tx_relations(tenant_id, member_id, extra)
+    await _validate_tx_relations(tenant_id, member_id, extra)
     if idem:
         existing=await db.transactions.find_one({"tenant_id":tenant_id,"idempotency_key":idem})
         if existing:
             _assert_idempotent_tx_matches(existing, tenant_id, member_id, typ, idempotency_minor, account, extra)
-            await _finalize_tx_side_effects(existing, user, suppress_notifications=suppress_notifications)
+            await _finalize_tx_side_effects(existing, user, suppress_admin_notifications=suppress_admin_notifications, timing_collector=timing_collector)
             return str(existing["_id"])
     normalized = float(from_minor(amount_minor))
     doc={"tenant_id":tenant_id,"member_id":member_id,"type":typ,"amount":normalized,"amount_minor":amount_minor,"account":account,"transaction_ref":f"BB-{now.strftime('%Y%m%d')}-{uuid.uuid4().hex[:10].upper()}","created_at":now,"idempotency_key":idem,"created_by":str(user.get("_id","system")),"created_by_role":user.get("role","system"),"created_by_phone":user.get("phone"),"side_effects_status":"pending","loan_apply_status":"pending" if typ=="loan_repayment" else "not_applicable",**extra}
@@ -920,10 +971,10 @@ async def insert_tx(tenant_id,member_id,typ,amount,account,user,**extra):
             existing=await db.transactions.find_one({"tenant_id":tenant_id,"idempotency_key":idem})
             if existing:
                 _assert_idempotent_tx_matches(existing, tenant_id, member_id, typ, idempotency_minor, account, extra)
-                await _finalize_tx_side_effects(existing, user, suppress_notifications=suppress_notifications)
+                await _finalize_tx_side_effects(existing, user, suppress_admin_notifications=suppress_admin_notifications, timing_collector=timing_collector)
                 return str(existing["_id"])
         raise exc
-    await _finalize_tx_side_effects(doc, user, suppress_notifications=suppress_notifications)
+    await _finalize_tx_side_effects(doc, user, suppress_admin_notifications=suppress_admin_notifications, timing_collector=timing_collector)
     return str(doc["_id"])
 
 @router.post("/{tenant_id}/contributions")
@@ -1166,19 +1217,21 @@ async def monthly_kist_bulk(tenant_id: str, body: BulkMonthlyKistCreate, user=De
     results = []
     paid_members = set()
     lock_keys = []
-    phase_started = perf_counter()
+    acquired_keys = []
     lock_seconds = 0.0
+    stage_times = {"journal_s": 0.0, "feed_s": 0.0, "audit_s": 0.0, "notification_s": 0.0, "completion_s": 0.0, "aggregate_s": 0.0, "insert_s": 0.0}
+    phase_started = perf_counter()
     try:
-        # Acquire all share locks in deterministic order before the first write.
-        # A conflict therefore fails the batch before partial posting begins.
+        # Expired lock cleanup is a single indexed batch query rather than one
+        # cleanup round-trip per share. Unique operation_key index still provides
+        # the atomic collision guard for each lock insert.
         lock_ttl = max(90, min(900, 10 * len(seen)))
-        for lock_key in sorted(
-            f"kist-payment:{tenant_id}:{body.period}:{share_id}" for share_id in seen
-        ):
-            lock_started = perf_counter()
-            await acquire_operation_lock(lock_key, lock_ttl)
-            lock_seconds += perf_counter() - lock_started
-            lock_keys.append(lock_key)
+        lock_keys = sorted(f"kist-payment:{tenant_id}:{body.period}:{share_id}" for share_id in seen)
+        lock_started = perf_counter()
+        await db.operation_locks.delete_many({"operation_key": {"$in": lock_keys}, "expires_at": {"$lte": datetime.now(timezone.utc)}})
+        lock_token = await acquire_operation_locks(lock_keys, lock_ttl)
+        lock_seconds += perf_counter() - lock_started
+        acquired_keys = list(lock_keys) if lock_token else []
 
         for entry in entries:
             for allocation in entry.allocations:
@@ -1200,7 +1253,7 @@ async def monthly_kist_bulk(tenant_id: str, body: BulkMonthlyKistCreate, user=De
                             to_minor(allocation.amount), body.account,
                             {"share_id": allocation.share_id, "payment_category": "monthly_kist", "period": body.period},
                         )
-                        await _finalize_tx_side_effects(existing_tx, user, suppress_notifications=True)
+                        await _finalize_tx_side_effects(existing_tx, user, suppress_admin_notifications=True, timing_collector=stage_times)
                         paid_amount_minor = _doc_amount_minor(existing_tx)
                         total_minor += paid_amount_minor
                         paid_members.add(entry.member_id)
@@ -1224,10 +1277,12 @@ async def monthly_kist_bulk(tenant_id: str, body: BulkMonthlyKistCreate, user=De
                 }
                 # Sum in MongoDB instead of fetching/sorting up to 500 historical
                 # records. This is exact in minor units and does not truncate history.
+                aggregate_started = perf_counter()
                 paid_aggregate = await db.transactions.aggregate([
                     {"$match": paid_query},
                     {"$group": {"_id": None, "paid_minor": {"$sum": _mongo_amount_minor_expr()}}},
                 ]).to_list(1)
+                stage_times["aggregate_s"] += perf_counter() - aggregate_started
                 already_minor = int((paid_aggregate[0] if paid_aggregate else {}).get("paid_minor", 0) or 0)
 
                 # Recalculate under the per-share operation lock so a stale status
@@ -1244,6 +1299,7 @@ async def monthly_kist_bulk(tenant_id: str, body: BulkMonthlyKistCreate, user=De
                 status = allocation_result["status"]
                 post_amount = float(from_minor(post_minor))
                 after = float(from_minor(after_minor))
+                insert_started = perf_counter()
                 txid = await insert_tx(
                     tenant_id, entry.member_id, "contribution", post_amount, body.account, user,
                     share_id=allocation.share_id, share_no=int(share["share_no"]),
@@ -1251,9 +1307,9 @@ async def monthly_kist_bulk(tenant_id: str, body: BulkMonthlyKistCreate, user=De
                     expected_amount=expected, paid_amount=after, status=status, date=dt,
                     note=body.note, idempotency_key=share_idem,
                     idempotency_amount_minor=to_minor(allocation.amount),
-                    suppress_notifications=True,
-                    relations_prevalidated=True,
+                    _suppress_admin_notifications=True, _timing_collector=stage_times,
                 )
+                stage_times["insert_s"] += perf_counter() - insert_started
                 total_minor += post_minor
                 paid_members.add(entry.member_id)
                 results.append({
@@ -1262,55 +1318,53 @@ async def monthly_kist_bulk(tenant_id: str, body: BulkMonthlyKistCreate, user=De
                 })
     finally:
         # Release all locks even if one allocation fails. Release is idempotent.
-        for lock_key in reversed(lock_keys):
-            await release_operation_lock(lock_key)
+        await release_operation_locks(acquired_keys, lock_token if "lock_token" in locals() else None)
 
     posting_seconds = perf_counter() - phase_started
     penalties = []
     penalty_started = perf_counter()
     for mid in paid_members:
-        pid = await _post_bc_penalty_once(tenant_id, mid, body.period, dt, body.account, user, body.note, suppress_notifications=True)
+        pid = await _post_bc_penalty_once(tenant_id, mid, body.period, dt, body.account, user, body.note, suppress_admin_notifications=True, timing_collector=stage_times)
         if pid:
             penalties.append(pid)
     penalty_seconds = perf_counter() - penalty_started
 
-    # Save All Kist is one collection operation, not dozens of independent alerts.
-    # Dismiss legacy per-transaction alerts for this month's BC kists/BC penalties,
-    # then keep one idempotent admin summary notification for the whole month.
     if results:
-        month_transactions = await db.transactions.find(
-            {"tenant_id": tenant_id, "period": body.period,
-             "$or": [{"payment_category": "monthly_kist"}, {"penalty_category": "bc"}]},
+        # A bulk monthly collection should produce one admin-facing summary, not
+        # one bell item per contribution/penalty. Keep source rows for idempotency;
+        # only dismiss their individual notification rows.
+        transaction_ids = []
+        for row in results:
+            try: transaction_ids.append(parse_oid(row["id"]))
+            except Exception: pass
+        for pid in penalties:
+            try: transaction_ids.append(parse_oid(pid))
+            except Exception: pass
+        transaction_ids = list({str(x): x for x in transaction_ids}.values())
+        tx_rows_for_notifications = await db.transactions.find(
+            {"tenant_id": tenant_id, "_id": {"$in": transaction_ids}},
             {"_id": 1, "member_id": 1},
-        ).to_list(5000)
-        old_notification_keys = []
-        for tx in month_transactions:
-            txid = str(tx.get("_id"))
-            old_notification_keys.append(f"admin-tx:{txid}")
-            if tx.get("member_id"):
-                old_notification_keys.append(f"tx:{txid}:{tx.get('member_id')}")
-        if old_notification_keys:
+        ).to_list(len(transaction_ids)) if transaction_ids else []
+        individual_keys = []
+        for txrow in tx_rows_for_notifications:
+            txid = str(txrow["_id"])
+            individual_keys.append(f"admin-tx:{txid}")
+        if individual_keys:
             await db.notifications.update_many(
-                {"tenant_id": tenant_id, "source_key": {"$in": old_notification_keys}},
+                {"tenant_id": tenant_id, "source_key": {"$in": individual_keys}},
                 {"$set": {"dismissed": True, "dismissed_at": datetime.now(timezone.utc)}},
             )
-
-        notification_now = datetime.now(timezone.utc)
+        summary_key = f"monthly-kist-bulk-summary:{tenant_id}:{body.period}"
+        summary_doc = {
+            "tenant_id": tenant_id, "recipient_role": "admin", "title": "Monthly BC Kist Collection",
+            "body": f"{len(paid_members)} member(s) collected ₹{float(from_minor(total_minor)):,.2f} in this monthly Kist batch for {body.period}.",
+            "read": False, "created_at": datetime.now(timezone.utc), "source_key": summary_key,
+        }
         await db.notifications.update_one(
-            {"tenant_id": tenant_id, "source_key": f"monthly-kist-bulk:{tenant_id}:{body.period}"},
-            {
-                "$set": {
-                    "recipient_role": "admin",
-                    "title": "Monthly kist collection completed",
-                    "body": f"Monthly kist collection recorded for {len(paid_members)} member(s). This batch total: ₹{float(from_minor(total_minor)):,.2f}.",
-                    "created_at": notification_now,
-                },
-                "$setOnInsert": {"tenant_id": tenant_id, "source_key": f"monthly-kist-bulk:{tenant_id}:{body.period}", "read": False},
-            },
+            {"tenant_id": tenant_id, "source_key": summary_key},
+            {"$set": {"title": summary_doc["title"], "body": summary_doc["body"], "updated_at": datetime.now(timezone.utc)}, "$setOnInsert": {"tenant_id": tenant_id, "recipient_role": "admin", "created_at": summary_doc["created_at"], "source_key": summary_key, "read": False}},
             upsert=True,
         )
-
-    if results:
         await audit(
             tenant_id, user, "MONTHLY_KIST_BULK_POSTED", "tenant", tenant_id,
             {"period": body.period, "entries": len(results), "amount": float(from_minor(total_minor))},
@@ -1321,8 +1375,10 @@ async def monthly_kist_bulk(tenant_id: str, body: BulkMonthlyKistCreate, user=De
     # Log timings only; do not log member IDs, payment amounts, or request payloads.
     if elapsed >= 1.0:
         logger.warning(
-            "Slow monthly_kist_bulk tenant=%s allocations=%d members=%d results=%d elapsed_s=%.3f posting_s=%.3f lock_s=%.3f penalties_s=%.3f",
+            "Slow monthly_kist_bulk tenant=%s allocations=%d members=%d results=%d elapsed_s=%.3f posting_s=%.3f lock_s=%.3f penalties_s=%.3f aggregate_s=%.3f insert_s=%.3f journal_s=%.3f feed_s=%.3f audit_s=%.3f notification_s=%.3f completion_s=%.3f",
             tenant_id, len(seen), len(entries), len(results), elapsed, posting_seconds, lock_seconds, penalty_seconds,
+            stage_times["aggregate_s"], stage_times["insert_s"], stage_times["journal_s"], stage_times["feed_s"],
+            stage_times["audit_s"], stage_times["notification_s"], stage_times["completion_s"],
         )
     return {
         "period": body.period, "entries": len(results), "total": float(from_minor(total_minor)),
