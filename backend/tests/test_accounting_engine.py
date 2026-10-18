@@ -103,6 +103,12 @@ class AccountingEngineTests(unittest.TestCase):
         self.assertEqual(bc_penalty_chargeable_days(11), 1)
         self.assertEqual(bc_penalty_chargeable_days(15), 5)
 
+    def test_bc_penalty_starts_the_day_after_configured_due_date(self):
+        # The configured due date (normally day 10) is already the grace cutoff.
+        # Day 11 is one overdue day, not eleven overdue days minus another grace window.
+        self.assertEqual(bc_penalty_chargeable_days(1, 0), 1)
+        self.assertEqual(bc_penalty_chargeable_days(8, 0), 8)
+
     def test_financial_feed_has_one_canonical_key_per_source(self):
         self.assertEqual(financial_feed_source_key("transaction", "abc123"), "tx:abc123")
         self.assertEqual(financial_feed_source_key("expense", "abc123"), "expense:abc123")

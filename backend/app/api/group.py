@@ -729,7 +729,9 @@ async def _post_bc_penalty_once(tenant_id:str,member_id:str,period:str,payment_d
     db=get_db(); tenant=settings_snapshot if settings_snapshot is not None else await group_settings(tenant_id)
     due_day=int(tenant.get("bc_due_date",10) or 10); per_day=float(tenant.get("bc_per_day_penalty",0) or 0)
     y,m=map(int,period.split("-")); overdue=_due_overdue_days(payment_dt,due_day,y,m)
-    chargeable_days=bc_penalty_chargeable_days(overdue, 10)  # 10-day grace period; charge from day 11 onward.
+    # bc_due_date is already the grace cutoff (normally day 10). Do not subtract
+    # a second 10-day grace window: the first overdue day (e.g. day 11) is chargeable.
+    chargeable_days=bc_penalty_chargeable_days(overdue, 0)
     amount_minor=chargeable_days*to_minor(per_day); amount=float(from_minor(amount_minor))
     if amount_minor<=0: return None
     key=f"bc:{tenant_id}:{member_id}:{period}"
@@ -738,7 +740,7 @@ async def _post_bc_penalty_once(tenant_id:str,member_id:str,period:str,payment_d
         await _finalize_tx_side_effects(existing,user,suppress_admin_notifications=suppress_admin_notifications,suppress_notifications=suppress_notifications,suppress_transaction_audit=suppress_transaction_audit,defer_completion=defer_completion,timing_collector=timing_collector)
         return str(existing["_id"])
     try:
-        return await insert_tx(tenant_id,member_id,"penalty",amount,account,user,date=payment_dt,note=note or f"BC Kist late penalty: {chargeable_days} chargeable overdue day(s) after 10-day grace period",payment_category="bc",penalty_category="bc",bc_regular_kist_penalty=amount,overdue_days=overdue,chargeable_overdue_days=chargeable_days,grace_days=10,per_day_penalty=per_day,period=period,bc_penalty_key=key,_suppress_admin_notifications=suppress_admin_notifications,_suppress_notifications=suppress_notifications,_suppress_transaction_audit=suppress_transaction_audit,_defer_side_effect_completion=defer_completion,_relations_prevalidated=relations_prevalidated,_timing_collector=timing_collector)
+        return await insert_tx(tenant_id,member_id,"penalty",amount,account,user,date=payment_dt,note=note or f"BC Kist late penalty: {chargeable_days} chargeable overdue day(s) after configured due day {due_day}",payment_category="bc",penalty_category="bc",bc_regular_kist_penalty=amount,overdue_days=overdue,chargeable_overdue_days=chargeable_days,grace_days=0,per_day_penalty=per_day,period=period,bc_penalty_key=key,_suppress_admin_notifications=suppress_admin_notifications,_suppress_notifications=suppress_notifications,_suppress_transaction_audit=suppress_transaction_audit,_defer_side_effect_completion=defer_completion,_relations_prevalidated=relations_prevalidated,_timing_collector=timing_collector)
     except Exception:
         # A concurrent collector may have inserted the unique period penalty
         # between the lookup and insert. Reuse it and finish any pending effects.

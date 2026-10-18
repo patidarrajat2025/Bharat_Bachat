@@ -1,22 +1,21 @@
-# Test Report
+# Test Report — 2026-10-18 follow-up fixes
 
 ## Passed
+- `python -m py_compile backend/app/api/group.py backend/app/accounting_engine.py`: PASS.
+- `python -m unittest tests.test_accounting_engine -v`: 21 tests passed, including the new assertion that the first day overdue is chargeable when the configured due date is already the cutoff.
+- `python -m unittest tests.test_journal -v`: PASS.
+- `python -m unittest tests.test_tenant_relation_validation -v`: PASS.
+- `frontend/src/App.tsx` TypeScript/JSX syntax transpilation: PASS (no syntax diagnostics).
+- ZIP integrity check: PASS.
 
-- Python syntax compilation for all backend `.py` source files: PASS (`python -m py_compile` over backend Python files).
-- Accounting engine unit tests: PASS (20 tests).
-- Journal unit tests: PASS (10 tests).
+## Blocked / not run
+- Full backend test discovery: the accounting authorization test module cannot import because `bson`/PyMongo is unavailable in this environment; other discovered tests passed.
+- Frontend production build/typecheck: dependencies could not be installed within the environment timeout, so a full `npm run build` is not verified.
+- MongoDB integration and live Render tests: not available here.
+- Existing historical Kist periods were not backfilled; the penalty fix applies when the normal Kist collection path runs after deployment.
 
-## Blocked in this environment
-
-- Full backend pytest suite: BLOCKED during collection because the runtime does not have `bson`/PyMongo installed (`ModuleNotFoundError: No module named 'bson'`). Installing `backend/requirements.txt` was attempted but package installation could not reach the package index due unavailable network/DNS.
-- Frontend TypeScript/production build: BLOCKED because `frontend/node_modules` is absent and dependencies cannot be installed in this environment.
-- MongoDB integration tests, query plans, multi-instance concurrency tests, and live Save All Kist benchmarks: BLOCKED because no MongoDB/staging credentials or representative dataset were supplied.
-
-## Commands run
-
-- `python -m py_compile` for all backend Python source files — PASS.
-- `python -m unittest tests/test_accounting_engine.py tests/test_journal.py -v` — PASS, 30 tests.
-- `python -m pytest -q` — BLOCKED at collection due missing `bson` dependency.
-- `python -m pip install -r backend/requirements.txt` — BLOCKED by unavailable network/DNS.
-
-Do not interpret blocked checks as passing. Run the full backend and frontend workflows in the project's normal development environment before deployment.
+## Production validation still required
+- Verify with an unused/pending member and payment date day 10 (no BC penalty), day 11 (one overdue day), and day 12 (two overdue days) using the group's configured `bc_per_day_penalty`.
+- Confirm one BC penalty transaction per member/period, balanced journal and financial-feed row, and no duplicate on an exact retry.
+- Verify dashboard Pending/Partial Save Payments uses selected date and account.
+- Verify Quick Action opens Create Loan and the large `This collection` value is fully visible on mobile.

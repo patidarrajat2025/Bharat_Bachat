@@ -3328,3 +3328,13 @@ button,.btn-primary,.btn-secondary,.input,textarea,select{font-size:15px}
 .loan-document-status span{padding:5px 8px;border-radius:999px;background:#f0f5f2;color:#52656d;font-size:10px;font-weight:800}
 .loan-document-status span.uploaded{background:#e4f7eb;color:#146c43}
 @media(max-width:600px){.loan-document-grid{grid-template-columns:1fr}.loan-request-tabs button{font-size:10px;padding:8px 3px}.loan-wizard-steps span{font-size:9px;padding:9px 3px}.loan-review-panel p{font-size:11px}}
+
+/* Kist status drill-down: collect into the selected cash/bank account and date. */
+.kist-drill-actions{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;align-items:end;margin-bottom:12px}
+.kist-drill-field{display:grid;gap:5px;min-width:0;color:#52636b;font-size:11px;font-weight:850}
+.kist-drill-field input,.kist-drill-field select{width:100%;min-width:0;min-height:42px;border:1px solid #d7e3dd;border-radius:11px;padding:8px 10px;background:#fff;color:#1a2b4c;font:inherit;font-size:13px}
+.kist-drill-actions>.btn-secondary,.kist-drill-actions>.btn-primary{min-height:42px;justify-content:center;white-space:normal}
+.bulk-summary-cards .metric-tile{overflow:visible!important}
+.bulk-summary-cards .metric-tile strong{min-width:0;max-width:100%;white-space:normal!important;overflow:visible!important;overflow-wrap:anywhere!important;word-break:normal!important;font-variant-numeric:tabular-nums;letter-spacing:-.025em}
+.bulk-summary-cards .metric-tile:nth-child(3) strong{font-size:clamp(10px,2.8vw,17px)!important;line-height:1.25!important}
+@media(max-width:760px){.kist-drill-actions{grid-template-columns:repeat(2,minmax(0,1fr))}.kist-drill-field{font-size:10px}.kist-drill-field input,.kist-drill-field select{font-size:12px;min-height:40px}.bulk-summary-cards .metric-tile:nth-child(3) strong{font-size:clamp(10px,2.7vw,14px)!important}}
