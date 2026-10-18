@@ -725,7 +725,7 @@ def _due_overdue_days(payment_dt:datetime, due_day:int, year:int|None=None, mont
     due=datetime(y,m,due_day,tzinfo=timezone.utc)
     return max(0,(payment_dt.date()-due.date()).days)
 
-async def _post_bc_penalty_once(tenant_id:str,member_id:str,period:str,payment_dt:datetime,account:str,user,note:str="", *, suppress_admin_notifications: bool = False, suppress_notifications: bool = False, suppress_transaction_audit: bool = False, defer_completion: bool = False, relations_prevalidated: bool = False, timing_collector: dict | None = None, settings_snapshot: dict | None = None):
+async def _post_bc_penalty_once(tenant_id:str,member_id:str,period:str,payment_dt:datetime,account:str,user,note:str="", *, share_id: str | None = None, share_no: int | None = None, suppress_admin_notifications: bool = False, suppress_notifications: bool = False, suppress_transaction_audit: bool = False, defer_completion: bool = False, relations_prevalidated: bool = False, timing_collector: dict | None = None, settings_snapshot: dict | None = None):
     db=get_db(); tenant=settings_snapshot if settings_snapshot is not None else await group_settings(tenant_id)
     due_day=int(tenant.get("bc_due_date",10) or 10); per_day=float(tenant.get("bc_per_day_penalty",0) or 0)
     y,m=map(int,period.split("-")); overdue=_due_overdue_days(payment_dt,due_day,y,m)
@@ -734,13 +734,21 @@ async def _post_bc_penalty_once(tenant_id:str,member_id:str,period:str,payment_d
     chargeable_days=bc_penalty_chargeable_days(overdue, 0)
     amount_minor=chargeable_days*to_minor(per_day); amount=float(from_minor(amount_minor))
     if amount_minor<=0: return None
-    key=f"bc:{tenant_id}:{member_id}:{period}"
+    # Regular BC penalties are assessed per share, not once per member.
+    # Keep a legacy member-level key only when no share context is available.
+    key=f"bc:{tenant_id}:{member_id}:{period}:share:{share_id}" if share_id else f"bc:{tenant_id}:{member_id}:{period}"
+    # If a legacy member-level penalty already exists for this period, do not
+    # create additional per-share penalties on retry/deployment transition.
+    if share_id:
+        legacy=await db.transactions.find_one({"tenant_id":tenant_id,"bc_penalty_key":f"bc:{tenant_id}:{member_id}:{period}"},{"_id":1})
+        if legacy:
+            return None
     existing=await db.transactions.find_one({"tenant_id":tenant_id,"bc_penalty_key":key})
     if existing:
         await _finalize_tx_side_effects(existing,user,suppress_admin_notifications=suppress_admin_notifications,suppress_notifications=suppress_notifications,suppress_transaction_audit=suppress_transaction_audit,defer_completion=defer_completion,timing_collector=timing_collector)
         return str(existing["_id"])
     try:
-        return await insert_tx(tenant_id,member_id,"penalty",amount,account,user,date=payment_dt,note=note or f"BC Kist late penalty: {chargeable_days} chargeable overdue day(s) after configured due day {due_day}",payment_category="bc",penalty_category="bc",bc_regular_kist_penalty=amount,overdue_days=overdue,chargeable_overdue_days=chargeable_days,grace_days=0,per_day_penalty=per_day,period=period,bc_penalty_key=key,_suppress_admin_notifications=suppress_admin_notifications,_suppress_notifications=suppress_notifications,_suppress_transaction_audit=suppress_transaction_audit,_defer_side_effect_completion=defer_completion,_relations_prevalidated=relations_prevalidated,_timing_collector=timing_collector)
+        return await insert_tx(tenant_id,member_id,"penalty",amount,account,user,date=payment_dt,note=note or f"BC Kist late penalty: {chargeable_days} chargeable overdue day(s) after configured due day {due_day}" + (f" · Share {share_no}" if share_no is not None else ""),share_id=share_id,share_no=share_no,payment_category="bc",penalty_category="bc",bc_regular_kist_penalty=amount,overdue_days=overdue,chargeable_overdue_days=chargeable_days,grace_days=0,per_day_penalty=per_day,period=period,bc_penalty_key=key,_suppress_admin_notifications=suppress_admin_notifications,_suppress_notifications=suppress_notifications,_suppress_transaction_audit=suppress_transaction_audit,_defer_side_effect_completion=defer_completion,_relations_prevalidated=relations_prevalidated,_timing_collector=timing_collector)
     except Exception:
         # A concurrent collector may have inserted the unique period penalty
         # between the lookup and insert. Reuse it and finish any pending effects.
@@ -1539,10 +1547,20 @@ async def monthly_kist_bulk(tenant_id: str, body: BulkMonthlyKistCreate, user=De
     posting_seconds = perf_counter() - phase_started
     penalty_started = perf_counter()
     penalty_semaphore = asyncio.Semaphore(16)
-    async def post_one_penalty(mid):
+    # A member's regular BC penalty applies independently to every active share,
+    # even when this request only collects one of those shares. Batch-load the
+    # active share set once rather than querying per member/share.
+    active_penalty_shares = await db.shares.find(
+        {"tenant_id": tenant_id, "member_id": {"$in": list(paid_members)}, "status": "active"},
+        {"_id": 1, "member_id": 1, "share_no": 1},
+    ).to_list(max(1, len(paid_members) * 100)) if paid_members else []
+    async def post_one_penalty(mid, share_id, share_no):
         async with penalty_semaphore:
-            return await _post_bc_penalty_once(tenant_id, mid, body.period, dt, body.account, user, body.note, suppress_admin_notifications=True, suppress_notifications=True, suppress_transaction_audit=True, defer_completion=True, relations_prevalidated=True, timing_collector=stage_times, settings_snapshot=tenant)
-    penalty_outcomes = await asyncio.gather(*(post_one_penalty(mid) for mid in paid_members), return_exceptions=True)
+            return await _post_bc_penalty_once(tenant_id, mid, body.period, dt, body.account, user, body.note, share_id=share_id, share_no=share_no, suppress_admin_notifications=True, suppress_notifications=True, suppress_transaction_audit=True, defer_completion=True, relations_prevalidated=True, timing_collector=stage_times, settings_snapshot=tenant)
+    penalty_tasks=[]
+    for share_doc in active_penalty_shares:
+        penalty_tasks.append(post_one_penalty(str(share_doc.get("member_id")), str(share_doc["_id"]), int(share_doc.get("share_no", 0)) or None))
+    penalty_outcomes = await asyncio.gather(*penalty_tasks, return_exceptions=True)
     penalty_failures = [x for x in penalty_outcomes if isinstance(x, BaseException)]
     if penalty_failures:
         raise penalty_failures[0]
@@ -1693,12 +1711,18 @@ async def monthly_kist(tenant_id:str,body:MonthlyKistCreate,user=Depends(admin_u
             results.append({"id":txid,"share_id":allocation.share_id,"share_no":int(share["share_no"]),"paid_amount":posted_amount,"cumulative_paid":after,"expected_amount":expected,"status":status})
         finally:
             await release_operation_lock(lock_key)
-    penalty_id=await _post_bc_penalty_once(tenant_id,body.member_id,body.period,dt,body.account,user,body.note)
+    penalty_ids=[]
+    # Apply the period penalty to every active share owned by this member, not
+    # just to shares that happened to receive money in this particular request.
+    member_active_shares=await db.shares.find({"tenant_id":tenant_id,"member_id":body.member_id,"status":"active"},{"_id":1,"share_no":1}).to_list(100)
+    for share_doc in member_active_shares:
+        penalty_id=await _post_bc_penalty_once(tenant_id,body.member_id,body.period,dt,body.account,user,body.note,share_id=str(share_doc["_id"]),share_no=int(share_doc.get("share_no",0)) or None)
+        if penalty_id: penalty_ids.append(penalty_id)
     penalty_amount=0.0
-    if penalty_id:
-        prow=await db.transactions.find_one({"_id":parse_oid(penalty_id),"tenant_id":tenant_id},{"amount":1})
-        penalty_amount=float((prow or {}).get("amount",0) or 0)
-    await audit(tenant_id,user,"MONTHLY_KIST_BATCH_POSTED","member",body.member_id,{"period":body.period,"shares":len(results),"amount":float(from_minor(total_minor)),"bc_regular_kist_penalty_posted":bool(penalty_id)},event_key=f"monthly-kist:{tenant_id}:{body.idempotency_key}" if body.idempotency_key else None)
+    if penalty_ids:
+        penalty_rows=await db.transactions.find({"_id":{"$in":[parse_oid(x) for x in penalty_ids]},"tenant_id":tenant_id},{"amount":1}).to_list(len(penalty_ids))
+        penalty_amount=sum(float((prow or {}).get("amount",0) or 0) for prow in penalty_rows)
+    await audit(tenant_id,user,"MONTHLY_KIST_BATCH_POSTED","member",body.member_id,{"period":body.period,"shares":len(results),"amount":float(from_minor(total_minor)),"bc_regular_kist_penalty_posted":bool(penalty_ids),"bc_regular_kist_penalty_shares":len(penalty_ids)},event_key=f"monthly-kist:{tenant_id}:{body.idempotency_key}" if body.idempotency_key else None)
     return {"period":body.period,"member_id":body.member_id,"results":results,"total":float(from_minor(total_minor)),"bc_regular_kist_penalty":round(penalty_amount,2)}
 
 @router.post("/{tenant_id}/money-in")
@@ -2163,7 +2187,10 @@ async def accounting_view(tenant_id:str, view:str, period:str|None=None, account
             elapsed_months=min(tenure,elapsed_months)
             accrued_interest=round(principal*rate*elapsed_months/100,2) if elapsed_months else 0.0
             stored_accrued=float(row.get("interest_accrued",0) or 0)
-            if stored_accrued>0: accrued_interest=min(accrued_interest,stored_accrued) if elapsed_months else 0.0
+            # Contractual simple interest grows with each elapsed month. Stored
+            # accrual is a lower bound for recovery/imported records, not a cap.
+            if elapsed_months:
+                accrued_interest=max(accrued_interest,stored_accrued)
             if row.get("status")=="closed": accrued_interest=interest_paid
             interest_remaining=max(0,accrued_interest-interest_paid)
             x.update({
@@ -2751,7 +2778,10 @@ async def loan_payment(tenant_id:str,body:LoanPayment,user=Depends(admin_user)):
             # Preserve the first-payment accrual rule, but do not accrue the same
             # month twice after a penalty-only or principal-only payment.
             elapsed_months=1
-        new_interest_minor=max(0,simple_interest_minor(outstanding_principal_minor,rate,elapsed_months)-interest_already_minor)
+        # This product's saved loan contract uses flat simple interest on the
+        # original disbursed principal; principal repayments must not silently
+        # reduce the agreed monthly interest amount.
+        new_interest_minor=max(0,simple_interest_minor(principal_minor,rate,elapsed_months)-interest_already_minor)
         # Carry forward accrued-but-unpaid interest when the payment is partial.
         accrued_before_minor=max(0,accrued_minor-interest_paid_total_minor)
         interest_due_minor=accrued_before_minor+new_interest_minor

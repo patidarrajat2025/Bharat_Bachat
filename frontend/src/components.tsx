@@ -124,7 +124,7 @@ export function Layout({children}:{children:ReactNode}){
   return <div className="app-shell" data-route={loc.pathname}><InstallBanner/>
     <header className="app-header safe-top figma-header">
       <div className="app-header-inner">
-        <Link to={user?.role==='super_admin'?'/admin':'/dashboard'} className="header-brand"><Logo compact/><span className="header-app-title flex-1 min-w-0 text-white font-bold whitespace-nowrap">Bharat Bachat</span></Link>
+        <Link to={user?.role==='super_admin'?'/admin':'/dashboard'} className="header-brand"><Logo compact/><span className="header-app-title flex-1 min-w-0 text-white font-bold">Bharat Bachat</span></Link>
         
         <div className="header-actions">
           <InstallButton/>

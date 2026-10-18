@@ -3338,3 +3338,17 @@ button,.btn-primary,.btn-secondary,.input,textarea,select{font-size:15px}
 .bulk-summary-cards .metric-tile strong{min-width:0;max-width:100%;white-space:normal!important;overflow:visible!important;overflow-wrap:anywhere!important;word-break:normal!important;font-variant-numeric:tabular-nums;letter-spacing:-.025em}
 .bulk-summary-cards .metric-tile:nth-child(3) strong{font-size:clamp(10px,2.8vw,17px)!important;line-height:1.25!important}
 @media(max-width:760px){.kist-drill-actions{grid-template-columns:repeat(2,minmax(0,1fr))}.kist-drill-field{font-size:10px}.kist-drill-field input,.kist-drill-field select{font-size:12px;min-height:40px}.bulk-summary-cards .metric-tile:nth-child(3) strong{font-size:clamp(10px,2.7vw,14px)!important}}
+
+
+/* Follow-up: keep full Bharat Bachat name visible on compact headers. */
+.app-header .header-brand{min-width:0!important;flex:1 1 auto!important;gap:7px!important;overflow:visible!important}
+.app-header .header-app-title{display:block!important;min-width:0!important;flex:1 1 auto!important;font-size:clamp(12px,3.8vw,18px)!important;line-height:1.15!important;letter-spacing:-.025em!important;white-space:normal!important;overflow:visible!important;text-overflow:clip!important;overflow-wrap:normal!important}
+.app-header .header-brand .brand-mark-lg{flex:0 0 auto!important}
+.bulk-summary-cards .metric-tile:nth-child(3){min-width:0!important;overflow:visible!important}
+.bulk-summary-cards .metric-tile:nth-child(3) strong{font-size:clamp(9px,2.8vw,17px)!important;white-space:normal!important;overflow:visible!important;overflow-wrap:anywhere!important;word-break:break-word!important;letter-spacing:-.04em!important;font-variant-numeric:tabular-nums}
+.loan-management-card>.section-head{display:flex;align-items:center;gap:10px;cursor:pointer}
+.loan-management-card>.section-head>div{min-width:0;flex:1}
+.loan-management-card>.section-head h3{overflow-wrap:anywhere}
+@media(max-width:420px){.app-header .header-app-title{font-size:12px!important}.app-header .header-brand{gap:5px!important}.app-header .header-brand .brand-mark-lg{width:32px!important;height:32px!important}}
+/* Highest-specificity mobile override: never truncate the app's own name. */
+@media(max-width:520px){.app-header.figma-header .header-brand .header-app-title{display:block!important;min-width:0!important;overflow:visible!important;text-overflow:clip!important;white-space:nowrap!important;font-size:clamp(11px,3.4vw,14px)!important;letter-spacing:-.035em!important;flex:1 1 auto!important}.app-header.figma-header .header-brand{flex:0 1 auto!important;min-width:0!important;overflow:visible!important}.app-header.figma-header .header-actions{flex:0 0 auto!important;gap:4px!important}}
