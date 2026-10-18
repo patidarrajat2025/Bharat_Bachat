@@ -3352,3 +3352,8 @@ button,.btn-primary,.btn-secondary,.input,textarea,select{font-size:15px}
 @media(max-width:420px){.app-header .header-app-title{font-size:12px!important}.app-header .header-brand{gap:5px!important}.app-header .header-brand .brand-mark-lg{width:32px!important;height:32px!important}}
 /* Highest-specificity mobile override: never truncate the app's own name. */
 @media(max-width:520px){.app-header.figma-header .header-brand .header-app-title{display:block!important;min-width:0!important;overflow:visible!important;text-overflow:clip!important;white-space:nowrap!important;font-size:clamp(11px,3.4vw,14px)!important;letter-spacing:-.035em!important;flex:1 1 auto!important}.app-header.figma-header .header-brand{flex:0 1 auto!important;min-width:0!important;overflow:visible!important}.app-header.figma-header .header-actions{flex:0 0 auto!important;gap:4px!important}}
+
+/* Keep large rupee totals readable in the three-card Bulk Kist summary. */
+.bulk-summary-cards .metric-tile { min-width: 0; overflow: visible; }
+.bulk-summary-cards .metric-tile strong { display: block; max-width: 100%; white-space: normal; overflow-wrap: anywhere; word-break: normal; font-size: clamp(.78rem, 2.8vw, 1.15rem); line-height: 1.25; }
+@media (max-width: 420px) { .bulk-summary-cards { gap: .35rem; } .bulk-summary-cards .metric-tile { padding: .65rem .45rem; } .bulk-summary-cards .metric-tile span { font-size: .68rem; } .bulk-summary-cards .metric-tile strong { font-size: clamp(.7rem, 2.6vw, .9rem); } }
