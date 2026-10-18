@@ -1311,10 +1311,28 @@ async def monthly_kist_bulk(tenant_id: str, body: BulkMonthlyKistCreate, user=De
                 already_minor_by_share[resolved_share_id] = already_minor_by_share.get(resolved_share_id, 0) + int(paid_row.get("paid_minor", 0) or 0)
         stage_times["aggregate_s"] += perf_counter() - aggregate_started
 
+        # Batch-read idempotency records once. The previous implementation did one
+        # indexed find_one per share, adding 50 network round-trips to a 50-share batch.
+        # The unique idempotency index and insert_tx duplicate-key recovery remain the
+        # final concurrency guard; this read is only a fast-path optimization.
+        idempotency_lookup_wall_started = perf_counter()
+        share_idem_keys = {
+            f"{body.idempotency_key}:{share_id}"
+            for share_id in seen
+        } if body.idempotency_key else set()
+        existing_by_idem = {}
+        if share_idem_keys:
+            existing_rows = await db.transactions.find({
+                "tenant_id": tenant_id,
+                "idempotency_key": {"$in": list(share_idem_keys)},
+            }).to_list(len(share_idem_keys))
+            existing_by_idem = {str(row.get("idempotency_key")): row for row in existing_rows}
+        idempotency_lookup_wall_s = perf_counter() - idempotency_lookup_wall_started
+
         # Shares are individually locked above. Post independent allocations concurrently
-        # with a bounded fan-out so network latency does not accumulate 50 times.
-        # Keep a moderate cap to avoid saturating the Mongo connection pool.
-        post_semaphore = asyncio.Semaphore(32)
+        # with bounded fan-out. Keep this cap configurable for different MongoDB plans.
+        post_concurrency = max(8, min(32, int(os.getenv("MONTHLY_KIST_POST_CONCURRENCY", "24"))))
+        post_semaphore = asyncio.Semaphore(post_concurrency)
 
         async def post_one_allocation(entry, allocation):
             async with post_semaphore:
@@ -1324,9 +1342,7 @@ async def monthly_kist_bulk(tenant_id: str, body: BulkMonthlyKistCreate, user=De
 
                 share_idem = f"{body.idempotency_key}:{allocation.share_id}" if body.idempotency_key else None
                 if share_idem:
-                    idem_started = perf_counter()
-                    existing_tx = await db.transactions.find_one({"tenant_id": tenant_id, "idempotency_key": share_idem})
-                    stage_times["idempotency_s"] += perf_counter() - idem_started
+                    existing_tx = existing_by_idem.get(share_idem)
                     if existing_tx:
                         _assert_idempotent_tx_matches(
                             existing_tx, tenant_id, entry.member_id, "contribution",
@@ -1485,11 +1501,13 @@ async def monthly_kist_bulk(tenant_id: str, body: BulkMonthlyKistCreate, user=De
     # Log timings only; do not log member IDs, payment amounts, or request payloads.
     if elapsed >= 1.0:
         logger.warning(
-            "Slow monthly_kist_bulk tenant=%s allocations=%d members=%d results=%d elapsed_s=%.3f posting_s=%.3f lock_s=%.3f penalties_s=%.3f aggregate_s=%.3f insert_s=%.3f mongo_insert_s=%.3f relation_s=%.3f idempotency_s=%.3f journal_s=%.3f feed_s=%.3f audit_s=%.3f notification_s=%.3f completion_s=%.3f",
+            "Slow monthly_kist_bulk tenant=%s allocations=%d members=%d results=%d elapsed_s=%.3f posting_wall_s=%.3f lock_wall_s=%.3f penalties_wall_s=%.3f aggregate_wall_s=%.3f idempotency_batch_wall_s=%.3f insert_accum_s=%.3f mongo_insert_accum_s=%.3f idempotency_accum_s=%.3f journal_accum_s=%.3f feed_accum_s=%.3f audit_accum_s=%.3f notification_accum_s=%.3f completion_wall_s=%.3f post_concurrency=%d",
             tenant_id, len(seen), len(entries), len(results), elapsed, posting_seconds, lock_seconds, penalty_seconds,
-            stage_times["aggregate_s"], stage_times["insert_s"], stage_times["mongo_insert_s"], stage_times["relation_s"],
-            stage_times["idempotency_s"], stage_times["journal_s"], stage_times["feed_s"],
-            stage_times["audit_s"], stage_times["notification_s"], stage_times["completion_s"],
+            stage_times["aggregate_s"], idempotency_lookup_wall_s if "idempotency_lookup_wall_s" in locals() else 0.0,
+            stage_times["insert_s"], stage_times["mongo_insert_s"], stage_times["idempotency_s"],
+            stage_times["journal_s"], stage_times["feed_s"], stage_times["audit_s"],
+            stage_times["notification_s"], stage_times["completion_s"],
+            post_concurrency if "post_concurrency" in locals() else 0,
         )
     return {
         "period": body.period, "entries": len(results), "total": float(from_minor(total_minor)),
