@@ -2,6 +2,8 @@ from datetime import datetime, timezone, date, timedelta
 from bson import ObjectId
 import asyncio
 import uuid
+import logging
+from time import perf_counter
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from ..db import get_db, backfill_financial_feed
 from ..deps import current_user, tenant_guard, require_roles, parse_oid
@@ -17,6 +19,7 @@ from ..share_service import ensure_member_shares
 from ..tenant_relations import scoped_entity_query, relation_matches
 
 router=APIRouter(prefix="/group",tags=["group"])
+logger = logging.getLogger(__name__)
 
 # Financial-feed repair is lazy and only runs when the materialized ledger is
 # behind the source collections. This keeps startup fast while guaranteeing that
@@ -946,8 +949,11 @@ async def monthly_kist_summary(tenant_id:str,period:str,user=Depends(current_use
         mid=str(member["_id"]); expected_count=max(1,int(member.get("shares",1) or 1))
         if len(shares_by_member.get(mid,[]))<expected_count:
             shares_by_member[mid]=await ensure_member_shares(member)
+    # Only aggregate transactions for the currently requested member page.
+    # The old query grouped the entire tenant's history even when the UI asked
+    # for a page of 10 members, making the status API slower as the group grew.
     tx_rows=await db.transactions.aggregate([
-        {"$match":{"tenant_id":tenant_id,"$and":[{"$or":[{"type":"contribution"},{"type":"reversal","original_type":"contribution"}]},{"$or":[{"payment_category":"monthly_kist"},{"payment_category":None},{"payment_category":{"$exists":False}}]},{"$or":[{"period":period},{"$and":[{"period":None},{"date":{"$gte":start,"$lt":end}}]}]}]}},
+        {"$match":{"tenant_id":tenant_id,"member_id":{"$in":member_ids},"$and":[{"$or":[{"type":"contribution"},{"type":"reversal","original_type":"contribution"}]},{"$or":[{"payment_category":"monthly_kist"},{"payment_category":None},{"payment_category":{"$exists":False}}]},{"$or":[{"period":period},{"$and":[{"period":None},{"date":{"$gte":start,"$lt":end}}]}]}]}},
         {"$group":{"_id":{"share_id":"$share_id","member_id":"$member_id","share_no":"$share_no"},"paid_minor":{"$sum":_mongo_amount_minor_expr()}}}
     ]).to_list(None)
     paid_by_share={}; paid_by_legacy={}
@@ -1064,56 +1070,215 @@ async def monthly_kist_bulk_status(tenant_id: str, period: str, page: int = 1, p
 
 @router.post("/{tenant_id}/monthly-kist-bulk")
 async def monthly_kist_bulk(tenant_id: str, body: BulkMonthlyKistCreate, user=Depends(admin_user)):
-    await tenant_guard(user, tenant_id); db=get_db()
-    tenant=await db.tenants.find_one({"_id":parse_oid(tenant_id)})
-    if not tenant: raise HTTPException(404,"Group not found")
+    """Collect monthly BC kist for multiple members with bounded DB reads.
+
+    The business posting path remains deliberately idempotent and sequential per
+    allocation. Read-side work is batched, historical paid amounts are summed in
+    MongoDB (rather than transferring up to 500 transaction documents per share),
+    and all request-level validation happens before the first financial write.
+    """
+    started = perf_counter()
+    await tenant_guard(user, tenant_id)
+    db = get_db()
+    tenant = await db.tenants.find_one({"_id": parse_oid(tenant_id)})
+    if not tenant:
+        raise HTTPException(404, "Group not found")
+
     try:
         period_year, period_month = map(int, body.period.split("-"))
-        if period_year < 1 or not 1 <= period_month <= 12: raise ValueError
+        if period_year < 1 or not 1 <= period_month <= 12:
+            raise ValueError
     except (ValueError, TypeError):
         raise HTTPException(400, "Period must be a valid month in YYYY-MM format")
-    expected_minor=to_minor(tenant.get("kist_per_share",500)); expected=float(from_minor(expected_minor)); dt=datetime.combine(body.date or date.today(),datetime.min.time(),tzinfo=timezone.utc)
-    total_minor=0; results=[]; seen=set(); paid_members=set()
-    for entry in body.entries:
-        if not entry.allocations: continue
-        member=await get_member(db,tenant_id,entry.member_id); shares=await ensure_member_shares(member); share_map={str(x["_id"]):x for x in shares}
+
+    period_start = datetime(period_year, period_month, 1, tzinfo=timezone.utc)
+    period_end = (
+        datetime(period_year + 1, 1, 1, tzinfo=timezone.utc)
+        if period_month == 12
+        else datetime(period_year, period_month + 1, 1, tzinfo=timezone.utc)
+    )
+    expected_minor = to_minor(tenant.get("kist_per_share", 500))
+    expected = float(from_minor(expected_minor))
+    dt = datetime.combine(body.date or date.today(), datetime.min.time(), tzinfo=timezone.utc)
+
+    entries = [entry for entry in body.entries if entry.allocations]
+    if not entries:
+        return {"period": body.period, "entries": 0, "total": 0.0, "results": [], "penalty_entries": 0}
+
+    # Validate duplicate allocations before any money is posted. The previous
+    # implementation could post earlier entries before discovering a duplicate.
+    seen = set()
+    for entry in entries:
         for allocation in entry.allocations:
-            lock_key=f"kist-payment:{tenant_id}:{body.period}:{allocation.share_id}"
-            await acquire_operation_lock(lock_key,90)
-            try:
-                if allocation.share_id in seen: raise HTTPException(400,"Duplicate share selected in bulk collection")
-                seen.add(allocation.share_id)
-                share=share_map.get(allocation.share_id)
-                if not share: raise HTTPException(400,"One or more selected shares are not active for this member")
-                share_idem=f"{body.idempotency_key}:{allocation.share_id}" if body.idempotency_key else None
+            if allocation.share_id in seen:
+                raise HTTPException(400, "Duplicate share selected in bulk collection")
+            seen.add(allocation.share_id)
+
+    # Batch-load members once instead of performing one get_member query per row.
+    try:
+        member_oids = {entry.member_id: parse_oid(entry.member_id) for entry in entries}
+    except Exception as exc:
+        raise HTTPException(400, "One or more member IDs are invalid") from exc
+    member_rows = await db.members.find(
+        {"tenant_id": tenant_id, "_id": {"$in": list(member_oids.values())}}
+    ).to_list(len(member_oids))
+    member_map = {str(row["_id"]): row for row in member_rows}
+    for entry in entries:
+        if entry.member_id not in member_map:
+            raise HTTPException(404, "Member not found")
+
+    # Batch-load active shares for all members. Only members whose share count is
+    # actually incomplete use the legacy repair helper (which can create shares).
+    member_ids = list(member_map.keys())
+    share_rows = await db.shares.find({
+        "tenant_id": tenant_id,
+        "member_id": {"$in": member_ids},
+        "status": "active",
+    }).sort("share_no", 1).to_list(max(1, sum(max(1, int(m.get("shares", 1) or 1)) for m in member_rows) + 100))
+    shares_by_member = {mid: [] for mid in member_ids}
+    for share in share_rows:
+        shares_by_member.setdefault(str(share.get("member_id")), []).append(share)
+    for mid, member in member_map.items():
+        configured_count = max(1, int(member.get("shares", 1) or 1))
+        if len(shares_by_member.get(mid, [])) < configured_count:
+            repaired = await ensure_member_shares(member)
+            shares_by_member[mid] = repaired
+
+    # Validate ownership and active status for every allocation before posting.
+    selected_shares = {}
+    for entry in entries:
+        member_shares = {str(row["_id"]): row for row in shares_by_member.get(entry.member_id, [])}
+        for allocation in entry.allocations:
+            share = member_shares.get(allocation.share_id)
+            if not share:
+                raise HTTPException(400, "One or more selected shares are not active for this member")
+            selected_shares[allocation.share_id] = (entry.member_id, share)
+
+    total_minor = 0
+    results = []
+    paid_members = set()
+    lock_keys = []
+    phase_started = perf_counter()
+    try:
+        # Acquire all share locks in deterministic order before the first write.
+        # A conflict therefore fails the batch before partial posting begins.
+        lock_ttl = max(90, min(900, 10 * len(seen)))
+        for lock_key in sorted(
+            f"kist-payment:{tenant_id}:{body.period}:{share_id}" for share_id in seen
+        ):
+            await acquire_operation_lock(lock_key, lock_ttl)
+            lock_keys.append(lock_key)
+
+        for entry in entries:
+            for allocation in entry.allocations:
+                share_owner, share = selected_shares[allocation.share_id]
+                paid_members.add(entry.member_id)
+                # The share was prevalidated against the entry's member. Keep this
+                # assertion explicit to guard future changes to request processing.
+                if share_owner != entry.member_id:
+                    raise HTTPException(400, "Selected share does not belong to this member")
+
+                share_idem = f"{body.idempotency_key}:{allocation.share_id}" if body.idempotency_key else None
                 if share_idem:
-                    existing_tx=await db.transactions.find_one({"tenant_id":tenant_id,"idempotency_key":share_idem})
+                    existing_tx = await db.transactions.find_one({
+                        "tenant_id": tenant_id, "idempotency_key": share_idem
+                    })
                     if existing_tx:
-                        _assert_idempotent_tx_matches(existing_tx,tenant_id,entry.member_id,"contribution",to_minor(allocation.amount),body.account,{"share_id":allocation.share_id,"payment_category":"monthly_kist","period":body.period})
-                        await _finalize_tx_side_effects(existing_tx,user)
-                        paid_amount_minor=_doc_amount_minor(existing_tx); paid_amount=float(from_minor(paid_amount_minor)); total_minor+=paid_amount_minor; paid_members.add(entry.member_id)
-                        results.append({"id":str(existing_tx["_id"]),"member_id":entry.member_id,"share_id":allocation.share_id,"share_no":int(share["share_no"]),"amount":paid_amount,"status":existing_tx.get("status","posted")})
+                        _assert_idempotent_tx_matches(
+                            existing_tx, tenant_id, entry.member_id, "contribution",
+                            to_minor(allocation.amount), body.account,
+                            {"share_id": allocation.share_id, "payment_category": "monthly_kist", "period": body.period},
+                        )
+                        await _finalize_tx_side_effects(existing_tx, user)
+                        paid_amount_minor = _doc_amount_minor(existing_tx)
+                        total_minor += paid_amount_minor
+                        paid_members.add(entry.member_id)
+                        results.append({
+                            "id": str(existing_tx["_id"]), "member_id": entry.member_id,
+                            "share_id": allocation.share_id, "share_no": int(share["share_no"]),
+                            "amount": float(from_minor(paid_amount_minor)),
+                            "status": existing_tx.get("status", "posted"),
+                        })
                         continue
-                y,m=map(int,body.period.split("-")); start=datetime(y,m,1,tzinfo=timezone.utc); end=datetime(y+1,1,1,tzinfo=timezone.utc) if m==12 else datetime(y,m+1,1,tzinfo=timezone.utc)
-                paid_rows=await db.transactions.find({"tenant_id":tenant_id,"member_id":entry.member_id,"$and":[{"$or":[{"type":"contribution"},{"type":"reversal","original_type":"contribution"}]},{"$or":[{"share_id":allocation.share_id},{"share_no":int(share["share_no"]),"share_id":{"$exists":False}}]},{"$or":[{"payment_category":"monthly_kist"},{"payment_category":None},{"payment_category":{"$exists":False}}]},{"$or":[{"period":body.period},{"$and":[{"period":None},{"date":{"$gte":start,"$lt":end}}]}]}] }).sort([("date",-1),("created_at",-1),("_id",-1)]).to_list(500)
-                already_minor=sum(_doc_amount_minor(x) for x in paid_rows)
-                # The status screen can be stale if another admin posts concurrently.
-                # Never over-collect: cap each bulk allocation to the live balance.
-                try: allocation_result=allocate_kist_payment(expected_minor,already_minor,to_minor(allocation.amount),cap_to_remaining=True)
-                except ValueError: continue
-                post_minor=allocation_result["posted_minor"]; after_minor=allocation_result["cumulative_minor"]; status=allocation_result["status"]
-                post_amount=float(from_minor(post_minor)); after=float(from_minor(after_minor))
-                txid=await insert_tx(tenant_id,entry.member_id,"contribution",post_amount,body.account,user,share_id=allocation.share_id,share_no=int(share["share_no"]),payment_category="monthly_kist",period=body.period,expected_amount=expected,paid_amount=after,status=status,date=dt,note=body.note,idempotency_key=share_idem,idempotency_amount_minor=to_minor(allocation.amount))
-                total_minor+=post_minor; paid_members.add(entry.member_id); results.append({"id":txid,"member_id":entry.member_id,"share_id":allocation.share_id,"share_no":int(share["share_no"]),"amount":post_amount,"status":status})
-            finally:
-                await release_operation_lock(lock_key)
-    penalties=[]
+
+                paid_query = {
+                    "tenant_id": tenant_id,
+                    "member_id": entry.member_id,
+                    "$and": [
+                        {"$or": [{"type": "contribution"}, {"type": "reversal", "original_type": "contribution"}]},
+                        {"$or": [{"share_id": allocation.share_id}, {"share_no": int(share["share_no"]), "share_id": {"$exists": False}}]},
+                        {"$or": [{"payment_category": "monthly_kist"}, {"payment_category": None}, {"payment_category": {"$exists": False}}]},
+                        {"$or": [{"period": body.period}, {"$and": [{"period": None}, {"date": {"$gte": period_start, "$lt": period_end}}]}]},
+                    ],
+                }
+                # Sum in MongoDB instead of fetching/sorting up to 500 historical
+                # records. This is exact in minor units and does not truncate history.
+                paid_aggregate = await db.transactions.aggregate([
+                    {"$match": paid_query},
+                    {"$group": {"_id": None, "paid_minor": {"$sum": _mongo_amount_minor_expr()}}},
+                ]).to_list(1)
+                already_minor = int((paid_aggregate[0] if paid_aggregate else {}).get("paid_minor", 0) or 0)
+
+                # Recalculate under the per-share operation lock so a stale status
+                # screen or concurrent administrator cannot over-collect the share.
+                try:
+                    allocation_result = allocate_kist_payment(
+                        expected_minor, already_minor, to_minor(allocation.amount), cap_to_remaining=True
+                    )
+                except ValueError:
+                    continue
+
+                post_minor = allocation_result["posted_minor"]
+                after_minor = allocation_result["cumulative_minor"]
+                status = allocation_result["status"]
+                post_amount = float(from_minor(post_minor))
+                after = float(from_minor(after_minor))
+                txid = await insert_tx(
+                    tenant_id, entry.member_id, "contribution", post_amount, body.account, user,
+                    share_id=allocation.share_id, share_no=int(share["share_no"]),
+                    payment_category="monthly_kist", period=body.period,
+                    expected_amount=expected, paid_amount=after, status=status, date=dt,
+                    note=body.note, idempotency_key=share_idem,
+                    idempotency_amount_minor=to_minor(allocation.amount),
+                )
+                total_minor += post_minor
+                paid_members.add(entry.member_id)
+                results.append({
+                    "id": txid, "member_id": entry.member_id, "share_id": allocation.share_id,
+                    "share_no": int(share["share_no"]), "amount": post_amount, "status": status,
+                })
+    finally:
+        # Release all locks even if one allocation fails. Release is idempotent.
+        for lock_key in reversed(lock_keys):
+            await release_operation_lock(lock_key)
+
+    posting_seconds = perf_counter() - phase_started
+    penalties = []
+    penalty_started = perf_counter()
     for mid in paid_members:
-        pid=await _post_bc_penalty_once(tenant_id,mid,body.period,dt,body.account,user,body.note)
-        if pid: penalties.append(pid)
+        pid = await _post_bc_penalty_once(tenant_id, mid, body.period, dt, body.account, user, body.note)
+        if pid:
+            penalties.append(pid)
+    penalty_seconds = perf_counter() - penalty_started
+
     if results:
-        await audit(tenant_id,user,"MONTHLY_KIST_BULK_POSTED","tenant",tenant_id,{"period":body.period,"entries":len(results),"amount":float(from_minor(total_minor))},event_key=f"monthly-kist-bulk:{tenant_id}:{body.idempotency_key}" if body.idempotency_key else None)
-    return {"period":body.period,"entries":len(results),"total":float(from_minor(total_minor)),"results":results,"penalty_entries":len(penalties)}
+        await audit(
+            tenant_id, user, "MONTHLY_KIST_BULK_POSTED", "tenant", tenant_id,
+            {"period": body.period, "entries": len(results), "amount": float(from_minor(total_minor))},
+            event_key=f"monthly-kist-bulk:{tenant_id}:{body.idempotency_key}" if body.idempotency_key else None,
+        )
+
+    elapsed = perf_counter() - started
+    # Log timings only; do not log member IDs, payment amounts, or request payloads.
+    if elapsed >= 1.0:
+        logger.warning(
+            "Slow monthly_kist_bulk tenant=%s allocations=%d members=%d results=%d elapsed_s=%.3f posting_s=%.3f penalties_s=%.3f",
+            tenant_id, len(seen), len(entries), len(results), elapsed, posting_seconds, penalty_seconds,
+        )
+    return {
+        "period": body.period, "entries": len(results), "total": float(from_minor(total_minor)),
+        "results": results, "penalty_entries": len(penalties),
+    }
 
 @router.post("/{tenant_id}/monthly-kist")
 async def monthly_kist(tenant_id:str,body:MonthlyKistCreate,user=Depends(admin_user)):
@@ -1615,14 +1780,34 @@ async def accounting_view(tenant_id:str, view:str, period:str|None=None, account
         for row in rows:
             x=serialize(row); m=members.get(str(row.get("member_id")))
             principal=float(row.get("principal",0) or 0); principal_paid=float(row.get("principal_paid",0) or 0)
-            expected_interest=float(row.get("interest_accrued",row.get("expected_interest",0)) or 0); interest_paid=float(row.get("interest_paid",0) or 0)
+            interest_paid=float(row.get("interest_paid",row.get("loan_interest_collected",0)) or 0)
+            start_raw=row.get("start_date") or row.get("created_at")
+            try:
+                start_dt=start_raw if isinstance(start_raw,datetime) else datetime.fromisoformat(str(start_raw).replace("Z","+00:00"))
+                if start_dt.tzinfo is None: start_dt=start_dt.replace(tzinfo=timezone.utc)
+                now_dt=datetime.now(timezone.utc)
+                elapsed_months=max(0,(now_dt.year-start_dt.year)*12+(now_dt.month-start_dt.month)+1)
+            except (ValueError,TypeError):
+                elapsed_months=0
+            tenure=max(1,int(row.get("months",1) or 1))
+            rate=max(0.0,float(row.get("interest_rate",0) or 0))
+            # Interest is accrued only for elapsed months, capped at the loan tenure.
+            # The displayed progress denominator is therefore the interest actually accrued so far,
+            # not the full-tenure estimate; with no accrued interest, progress is 0%, never 100%.
+            elapsed_months=min(tenure,elapsed_months)
+            accrued_interest=round(principal*rate*elapsed_months/100,2) if elapsed_months else 0.0
+            stored_accrued=float(row.get("interest_accrued",0) or 0)
+            if stored_accrued>0: accrued_interest=min(accrued_interest,stored_accrued) if elapsed_months else 0.0
+            if row.get("status")=="closed": accrued_interest=interest_paid
+            interest_remaining=max(0,accrued_interest-interest_paid)
             x.update({
                 "member_name":f'{m.get("first_name","")} {m.get("last_name","")}'.strip() if m else "Member",
                 "principal_remaining":round(max(0,principal-principal_paid),2),
-                "interest_remaining":round(max(0,expected_interest-interest_paid),2),
-                "total_outstanding":round(max(0,principal-principal_paid)+max(0,expected_interest-interest_paid),2),
+                "interest_accrued_to_date":round(accrued_interest,2),
+                "interest_remaining":round(interest_remaining,2),
+                "total_outstanding":round(max(0,principal-principal_paid)+interest_remaining,2),
                 "principal_progress":round(min(100,principal_paid/max(1,principal)*100),1),
-                "interest_progress":round(min(100,interest_paid/max(1,expected_interest)*100),1) if expected_interest else 100,
+                "interest_progress":round(min(100,interest_paid/accrued_interest*100),1) if accrued_interest > 0 else 0,
             })
             out.append(x)
         return {"view":view,"loans":out,"total_principal":round(sum(float(x.get("principal",0) or 0) for x in rows),2),"total_outstanding":round(sum(x["total_outstanding"] for x in out),2)}
