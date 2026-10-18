@@ -932,6 +932,7 @@ async def insert_tx(tenant_id,member_id,typ,amount,account,user,**extra):
     defer_completion = bool(extra.pop("_defer_side_effect_completion", False))
     relations_prevalidated = bool(extra.pop("_relations_prevalidated", False))
     timing_collector = extra.pop("_timing_collector", None)
+    idempotency_prechecked = bool(extra.pop("_idempotency_prechecked", False))
     amount_minor = to_minor(amount or 0)
     idempotency_minor = int(extra.get("idempotency_amount_minor", amount_minor))
     if not relations_prevalidated:
@@ -939,7 +940,7 @@ async def insert_tx(tenant_id,member_id,typ,amount,account,user,**extra):
         await _validate_tx_relations(tenant_id, member_id, extra)
         if timing_collector is not None:
             timing_collector["relation_s"] = timing_collector.get("relation_s", 0.0) + perf_counter() - stage_started
-    if idem:
+    if idem and not idempotency_prechecked:
         idem_started = perf_counter()
         existing=await db.transactions.find_one({"tenant_id":tenant_id,"idempotency_key":idem})
         if timing_collector is not None:
@@ -1310,48 +1311,45 @@ async def monthly_kist_bulk(tenant_id: str, body: BulkMonthlyKistCreate, user=De
                 already_minor_by_share[resolved_share_id] = already_minor_by_share.get(resolved_share_id, 0) + int(paid_row.get("paid_minor", 0) or 0)
         stage_times["aggregate_s"] += perf_counter() - aggregate_started
 
-        for entry in entries:
-            for allocation in entry.allocations:
+        # Shares are individually locked above. Post independent allocations concurrently
+        # with a bounded fan-out so network latency does not accumulate 50 times.
+        # Keep a moderate cap to avoid saturating the Mongo connection pool.
+        post_semaphore = asyncio.Semaphore(20)
+
+        async def post_one_allocation(entry, allocation):
+            async with post_semaphore:
                 share_owner, share = selected_shares[allocation.share_id]
-                paid_members.add(entry.member_id)
-                # The share was prevalidated against the entry's member. Keep this
-                # assertion explicit to guard future changes to request processing.
                 if share_owner != entry.member_id:
                     raise HTTPException(400, "Selected share does not belong to this member")
 
                 share_idem = f"{body.idempotency_key}:{allocation.share_id}" if body.idempotency_key else None
                 if share_idem:
-                    existing_tx = await db.transactions.find_one({
-                        "tenant_id": tenant_id, "idempotency_key": share_idem
-                    })
+                    idem_started = perf_counter()
+                    existing_tx = await db.transactions.find_one({"tenant_id": tenant_id, "idempotency_key": share_idem})
+                    stage_times["idempotency_s"] += perf_counter() - idem_started
                     if existing_tx:
                         _assert_idempotent_tx_matches(
                             existing_tx, tenant_id, entry.member_id, "contribution",
                             to_minor(allocation.amount), body.account,
                             {"share_id": allocation.share_id, "payment_category": "monthly_kist", "period": body.period},
                         )
-                        await _finalize_tx_side_effects(existing_tx, user, suppress_admin_notifications=True, suppress_notifications=True, suppress_transaction_audit=True, defer_completion=True, relations_prevalidated=True, timing_collector=stage_times)
+                        await _finalize_tx_side_effects(
+                            existing_tx, user, suppress_admin_notifications=True, suppress_notifications=True,
+                            suppress_transaction_audit=True, defer_completion=True, timing_collector=stage_times,
+                        )
                         paid_amount_minor = _doc_amount_minor(existing_tx)
-                        total_minor += paid_amount_minor
-                        paid_members.add(entry.member_id)
-                        results.append({
-                            "id": str(existing_tx["_id"]), "member_id": entry.member_id,
-                            "share_id": allocation.share_id, "share_no": int(share["share_no"]),
-                            "amount": float(from_minor(paid_amount_minor)),
-                            "status": existing_tx.get("status", "posted"),
-                        })
-                        continue
+                        return {"id": str(existing_tx["_id"]), "member_id": entry.member_id,
+                                "share_id": allocation.share_id, "share_no": int(share["share_no"]),
+                                "amount": float(from_minor(paid_amount_minor)),
+                                "status": existing_tx.get("status", "posted")}, paid_amount_minor, entry.member_id
 
                 already_minor = int(already_minor_by_share.get(allocation.share_id, 0))
-
-                # Recalculate under the per-share operation lock so a stale status
-                # screen or concurrent administrator cannot over-collect the share.
                 try:
                     allocation_result = allocate_kist_payment(
                         expected_minor, already_minor, to_minor(allocation.amount), cap_to_remaining=True
                     )
                 except ValueError:
-                    continue
+                    return None
 
                 post_minor = allocation_result["posted_minor"]
                 after_minor = allocation_result["cumulative_minor"]
@@ -1366,26 +1364,46 @@ async def monthly_kist_bulk(tenant_id: str, body: BulkMonthlyKistCreate, user=De
                     expected_amount=expected, paid_amount=after, status=status, date=dt,
                     note=body.note, idempotency_key=share_idem,
                     idempotency_amount_minor=to_minor(allocation.amount),
-                    _suppress_admin_notifications=True, _suppress_notifications=True, _suppress_transaction_audit=True, _defer_side_effect_completion=True, _relations_prevalidated=True, _timing_collector=stage_times,
+                    _suppress_admin_notifications=True, _suppress_notifications=True,
+                    _suppress_transaction_audit=True, _defer_side_effect_completion=True,
+                    _relations_prevalidated=True, _idempotency_prechecked=bool(share_idem),
+                    _timing_collector=stage_times,
                 )
                 stage_times["insert_s"] += perf_counter() - insert_started
-                total_minor += post_minor
-                paid_members.add(entry.member_id)
-                results.append({
-                    "id": txid, "member_id": entry.member_id, "share_id": allocation.share_id,
-                    "share_no": int(share["share_no"]), "amount": post_amount, "status": status,
-                })
+                return {"id": txid, "member_id": entry.member_id, "share_id": allocation.share_id,
+                        "share_no": int(share["share_no"]), "amount": post_amount, "status": status}, post_minor, entry.member_id
+
+        allocation_jobs = [post_one_allocation(entry, allocation)
+                           for entry in entries for allocation in entry.allocations]
+        allocation_outcomes = await asyncio.gather(*allocation_jobs, return_exceptions=True)
+        failures = [x for x in allocation_outcomes if isinstance(x, BaseException)]
+        if failures:
+            # Transactions already durably inserted are left recoverable by their
+            # idempotency keys and pending side-effect markers; do not mask failures.
+            raise failures[0]
+        for outcome in allocation_outcomes:
+            if outcome is None:
+                continue
+            row, amount_minor, member_id = outcome
+            results.append(row)
+            total_minor += amount_minor
+            paid_members.add(member_id)
+
     finally:
         # Release all locks even if one allocation fails. Release is idempotent.
         await release_operation_locks(acquired_keys, lock_token if "lock_token" in locals() else None)
 
     posting_seconds = perf_counter() - phase_started
-    penalties = []
     penalty_started = perf_counter()
-    for mid in paid_members:
-        pid = await _post_bc_penalty_once(tenant_id, mid, body.period, dt, body.account, user, body.note, suppress_admin_notifications=True, suppress_notifications=True, suppress_transaction_audit=True, defer_completion=True, relations_prevalidated=True, timing_collector=stage_times)
-        if pid:
-            penalties.append(pid)
+    penalty_semaphore = asyncio.Semaphore(12)
+    async def post_one_penalty(mid):
+        async with penalty_semaphore:
+            return await _post_bc_penalty_once(tenant_id, mid, body.period, dt, body.account, user, body.note, suppress_admin_notifications=True, suppress_notifications=True, suppress_transaction_audit=True, defer_completion=True, relations_prevalidated=True, timing_collector=stage_times)
+    penalty_outcomes = await asyncio.gather(*(post_one_penalty(mid) for mid in paid_members), return_exceptions=True)
+    penalty_failures = [x for x in penalty_outcomes if isinstance(x, BaseException)]
+    if penalty_failures:
+        raise penalty_failures[0]
+    penalties = [pid for pid in penalty_outcomes if pid]
     penalty_seconds = perf_counter() - penalty_started
 
     # Every transaction's journal/feed has completed successfully. Mark the batch
