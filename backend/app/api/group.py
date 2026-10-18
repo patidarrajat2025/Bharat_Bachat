@@ -3,8 +3,10 @@ from bson import ObjectId
 import asyncio
 import uuid
 import logging
+import hashlib
 from time import perf_counter
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from pymongo import ReturnDocument
 from ..db import get_db, backfill_financial_feed
 from ..deps import current_user, tenant_guard, require_roles, parse_oid
 from ..models import *
@@ -722,7 +724,7 @@ def _due_overdue_days(payment_dt:datetime, due_day:int, year:int|None=None, mont
     due=datetime(y,m,due_day,tzinfo=timezone.utc)
     return max(0,(payment_dt.date()-due.date()).days)
 
-async def _post_bc_penalty_once(tenant_id:str,member_id:str,period:str,payment_dt:datetime,account:str,user,note:str="", *, suppress_admin_notifications: bool = False, timing_collector: dict | None = None):
+async def _post_bc_penalty_once(tenant_id:str,member_id:str,period:str,payment_dt:datetime,account:str,user,note:str="", *, suppress_admin_notifications: bool = False, suppress_notifications: bool = False, suppress_transaction_audit: bool = False, defer_completion: bool = False, relations_prevalidated: bool = False, timing_collector: dict | None = None):
     db=get_db(); tenant=await group_settings(tenant_id)
     due_day=int(tenant.get("bc_due_date",10) or 10); per_day=float(tenant.get("bc_per_day_penalty",0) or 0)
     y,m=map(int,period.split("-")); overdue=_due_overdue_days(payment_dt,due_day,y,m)
@@ -732,16 +734,16 @@ async def _post_bc_penalty_once(tenant_id:str,member_id:str,period:str,payment_d
     key=f"bc:{tenant_id}:{member_id}:{period}"
     existing=await db.transactions.find_one({"tenant_id":tenant_id,"bc_penalty_key":key})
     if existing:
-        await _finalize_tx_side_effects(existing,user,suppress_admin_notifications=suppress_admin_notifications,timing_collector=timing_collector)
+        await _finalize_tx_side_effects(existing,user,suppress_admin_notifications=suppress_admin_notifications,suppress_notifications=suppress_notifications,suppress_transaction_audit=suppress_transaction_audit,defer_completion=defer_completion,timing_collector=timing_collector)
         return str(existing["_id"])
     try:
-        return await insert_tx(tenant_id,member_id,"penalty",amount,account,user,date=payment_dt,note=note or f"BC Kist late penalty: {chargeable_days} chargeable overdue day(s) after 10-day grace period",payment_category="bc",penalty_category="bc",bc_regular_kist_penalty=amount,overdue_days=overdue,chargeable_overdue_days=chargeable_days,grace_days=10,per_day_penalty=per_day,period=period,bc_penalty_key=key,_suppress_admin_notifications=suppress_admin_notifications,_timing_collector=timing_collector)
+        return await insert_tx(tenant_id,member_id,"penalty",amount,account,user,date=payment_dt,note=note or f"BC Kist late penalty: {chargeable_days} chargeable overdue day(s) after 10-day grace period",payment_category="bc",penalty_category="bc",bc_regular_kist_penalty=amount,overdue_days=overdue,chargeable_overdue_days=chargeable_days,grace_days=10,per_day_penalty=per_day,period=period,bc_penalty_key=key,_suppress_admin_notifications=suppress_admin_notifications,_suppress_notifications=suppress_notifications,_suppress_transaction_audit=suppress_transaction_audit,_defer_side_effect_completion=defer_completion,_relations_prevalidated=relations_prevalidated,_timing_collector=timing_collector)
     except Exception:
         # A concurrent collector may have inserted the unique period penalty
         # between the lookup and insert. Reuse it and finish any pending effects.
         existing=await db.transactions.find_one({"tenant_id":tenant_id,"bc_penalty_key":key})
         if not existing: raise
-        await _finalize_tx_side_effects(existing,user,suppress_admin_notifications=suppress_admin_notifications,timing_collector=timing_collector)
+        await _finalize_tx_side_effects(existing,user,suppress_admin_notifications=suppress_admin_notifications,suppress_notifications=suppress_notifications,suppress_transaction_audit=suppress_transaction_audit,defer_completion=defer_completion,timing_collector=timing_collector)
         return str(existing["_id"])
 
 async def _feed_upsert(doc, *, source_type="transaction"):
@@ -758,27 +760,57 @@ async def _feed_upsert(doc, *, source_type="transaction"):
     if created_at is not None: update["$setOnInsert"]={"created_at":created_at}
     await db.financial_feed.update_one({"tenant_id":feed.get("tenant_id"),"source_key":feed["source_key"]},update,upsert=True)
 
-async def _post_transaction_journal(doc: dict):
-    """Persist and verify one transaction's balanced journal idempotently."""
-    db=get_db(); journal=build_journal(doc)
-    if not journal:
-        return None
-    source_key=f"tx:{doc['_id']}"
-    journal_doc={"tenant_id":doc.get("tenant_id"),"source_type":"transaction","source_id":str(doc["_id"]),
-                 "source_key":source_key,"status":"pending",**journal,
-                 "created_at":doc.get("created_at") or datetime.now(timezone.utc)}
-    await db.journal_entries.update_one({"tenant_id":doc.get("tenant_id"),"source_key":source_key},
-                                        {"$setOnInsert":journal_doc},upsert=True)
-    stored=await db.journal_entries.find_one({"tenant_id":doc.get("tenant_id"),"source_key":source_key})
-    if not stored or not stored.get("balanced") or int(stored.get("debit_minor",-1)) != int(stored.get("credit_minor",-2)):
+async def _persist_verified_posted_journal(doc: dict, journal: dict):
+    """Upsert/verify/post a journal in one atomic round trip, then mark source posted.
+
+    The unique (tenant_id, source_key) index prevents a malformed existing journal
+    from being replaced by an upsert. The match includes the expected balanced
+    totals; a conflicting existing row fails closed rather than being marked posted.
+    """
+    db = get_db()
+    tenant_id = doc.get("tenant_id")
+    source_key = f"tx:{doc['_id']}"
+    now = datetime.now(timezone.utc)
+    journal_doc = {
+        "tenant_id": tenant_id, "source_type": "transaction", "source_id": str(doc["_id"]),
+        "source_key": source_key, **journal,
+        "created_at": doc.get("created_at") or now,
+    }
+    # status/posted_at are set in $set to avoid conflicting update paths.
+    expected_query = {
+        "tenant_id": tenant_id, "source_key": source_key,
+        "balanced": True,
+        "debit_minor": int(journal.get("debit_minor", -1)),
+        "credit_minor": int(journal.get("credit_minor", -2)),
+    }
+    try:
+        stored = await db.journal_entries.find_one_and_update(
+            expected_query,
+            {"$set": {"status": "posted", "posted_at": now}, "$setOnInsert": journal_doc},
+            upsert=True,
+            return_document=ReturnDocument.AFTER,
+        )
+    except Exception as exc:
+        # A duplicate-key conflict means a row already exists for this source but
+        # it did not match the expected balanced totals. Never overwrite it.
+        raise RuntimeError(f"Journal for transaction {doc['_id']} conflicts with expected balanced totals") from exc
+    if (not stored or not stored.get("balanced")
+            or int(stored.get("debit_minor", -1)) != int(stored.get("credit_minor", -2))
+            or int(stored.get("debit_minor", -1)) != int(journal.get("debit_minor", -2))):
         raise RuntimeError(f"Journal for transaction {doc['_id']} is not balanced")
-    await db.journal_entries.update_one({"tenant_id":doc.get("tenant_id"),"source_key":source_key},
-                                        {"$set":{"status":"posted","posted_at":datetime.now(timezone.utc)}})
-    await db.transactions.update_one({"_id":doc["_id"],"tenant_id":doc.get("tenant_id")},
-                                     {"$set":{"journal_status":"posted"}})
-    stored["status"]="posted"
+    await db.transactions.update_one(
+        {"_id": doc["_id"], "tenant_id": tenant_id},
+        {"$set": {"journal_status": "posted"}},
+    )
     return stored
 
+
+async def _post_transaction_journal(doc: dict):
+    """Persist and verify one transaction's balanced journal idempotently."""
+    journal = build_journal(doc)
+    if not journal:
+        return None
+    return await _persist_verified_posted_journal(doc, journal)
 
 async def _ensure_tx_journal(doc: dict):
     """Idempotently post/recover a journal, including the source of a reversal."""
@@ -802,22 +834,11 @@ async def _ensure_tx_journal(doc: dict):
             await db.transactions.update_one({"_id":doc["_id"],"tenant_id":doc.get("tenant_id")},
                                              {"$set":{"journal_status":"not_applicable"}})
         return
-    source_key=f"tx:{doc['_id']}"
-    journal_doc={"tenant_id":doc.get("tenant_id"),"source_type":"transaction","source_id":str(doc["_id"]),
-                 "source_key":source_key,"status":"pending",**journal,
-                 "created_at":doc.get("created_at") or datetime.now(timezone.utc)}
-    await db.journal_entries.update_one({"tenant_id":doc.get("tenant_id"),"source_key":source_key},
-                                        {"$setOnInsert":journal_doc},upsert=True)
-    stored=await db.journal_entries.find_one({"tenant_id":doc.get("tenant_id"),"source_key":source_key})
-    if not stored or not stored.get("balanced") or int(stored.get("debit_minor",-1)) != int(stored.get("credit_minor",-2)):
-        raise RuntimeError(f"Journal for transaction {doc['_id']} is not balanced")
-    await db.journal_entries.update_one({"tenant_id":doc.get("tenant_id"),"source_key":source_key},
-                                        {"$set":{"status":"posted","posted_at":datetime.now(timezone.utc)}})
-    await db.transactions.update_one({"_id":doc["_id"],"tenant_id":doc.get("tenant_id")},
-                                     {"$set":{"journal_status":"posted"}})
+    await _persist_verified_posted_journal(doc, journal)
 
-
-async def _finalize_tx_side_effects(doc: dict, user: dict, *, suppress_admin_notifications: bool = False, timing_collector: dict | None = None):
+async def _finalize_tx_side_effects(doc: dict, user: dict, *, suppress_admin_notifications: bool = False,
+                                    suppress_notifications: bool = False, suppress_transaction_audit: bool = False,
+                                    defer_completion: bool = False, timing_collector: dict | None = None):
     """Retry-safe completion after the source transaction is durable.
 
     Independent, idempotent journal/feed/audit/notification writes run concurrently.
@@ -841,14 +862,15 @@ async def _finalize_tx_side_effects(doc: dict, user: dict, *, suppress_admin_not
     tasks = [
         timed_stage("journal_s", _ensure_tx_journal(doc)),
         timed_stage("feed_s", _feed_upsert(doc)),
-        timed_stage("audit_s", audit(doc["tenant_id"], user, f"{typ.upper()}_POSTED", "transaction", txid,
-                                      {"amount": doc.get("amount", 0)}, event_key=f"tx-posted:{txid}")),
     ]
-    if member_id and typ != "expense_allocation":
+    if not suppress_transaction_audit:
+        tasks.append(timed_stage("audit_s", audit(doc["tenant_id"], user, f"{typ.upper()}_POSTED", "transaction", txid,
+                                      {"amount": doc.get("amount", 0)}, event_key=f"tx-posted:{txid}")))
+    if not suppress_notifications and member_id and typ != "expense_allocation":
         tasks.append(timed_stage("notification_s", _create_notification(
             doc["tenant_id"], role="member", member_id=str(member_id), source_key=f"tx:{txid}:{member_id}",
             title="Account activity", body=f"{typ.replace('_',' ').title()} ₹{float(doc.get('amount',0) or 0):,.2f}.", created_at=created_at)))
-    if not suppress_admin_notifications and user.get("role") in ("member", "group_admin") and typ != "expense_allocation":
+    if not suppress_notifications and not suppress_admin_notifications and user.get("role") in ("member", "group_admin") and typ != "expense_allocation":
         tasks.append(timed_stage("notification_s", _create_notification(
             doc["tenant_id"], role="admin", source_key=f"admin-tx:{txid}", title="Group activity",
             body=f"{typ.replace('_',' ').title()} ₹{float(doc.get('amount',0) or 0):,.2f}.", created_at=created_at)))
@@ -859,10 +881,11 @@ async def _finalize_tx_side_effects(doc: dict, user: dict, *, suppress_admin_not
 
     if typ == "reversal" and doc.get("original_type") == "loan_repayment":
         await _apply_loan_repayment_reversal_once(doc["tenant_id"], doc)
-    stage_started = perf_counter()
-    await db.transactions.update_one({"_id":doc["_id"],"tenant_id":doc["tenant_id"]},{"$set":{"side_effects_status":"complete","side_effects_completed_at":datetime.now(timezone.utc)}})
-    if timing_collector is not None:
-        timing_collector["completion_s"] = timing_collector.get("completion_s", 0.0) + perf_counter() - stage_started
+    if not defer_completion:
+        stage_started = perf_counter()
+        await db.transactions.update_one({"_id":doc["_id"],"tenant_id":doc["tenant_id"]},{"$set":{"side_effects_status":"complete","side_effects_completed_at":datetime.now(timezone.utc)}})
+        if timing_collector is not None:
+            timing_collector["completion_s"] = timing_collector.get("completion_s", 0.0) + perf_counter() - stage_started
 
 
 async def _validate_tx_relations(tenant_id: str, member_id, extra: dict):
@@ -904,15 +927,26 @@ def _assert_idempotent_tx_matches(existing: dict, tenant_id: str, member_id, typ
 async def insert_tx(tenant_id,member_id,typ,amount,account,user,**extra):
     db=get_db(); now=datetime.now(timezone.utc); idem=extra.pop("idempotency_key",None)
     suppress_admin_notifications = bool(extra.pop("_suppress_admin_notifications", False))
+    suppress_notifications = bool(extra.pop("_suppress_notifications", False))
+    suppress_transaction_audit = bool(extra.pop("_suppress_transaction_audit", False))
+    defer_completion = bool(extra.pop("_defer_side_effect_completion", False))
+    relations_prevalidated = bool(extra.pop("_relations_prevalidated", False))
     timing_collector = extra.pop("_timing_collector", None)
     amount_minor = to_minor(amount or 0)
     idempotency_minor = int(extra.get("idempotency_amount_minor", amount_minor))
-    await _validate_tx_relations(tenant_id, member_id, extra)
+    if not relations_prevalidated:
+        stage_started = perf_counter()
+        await _validate_tx_relations(tenant_id, member_id, extra)
+        if timing_collector is not None:
+            timing_collector["relation_s"] = timing_collector.get("relation_s", 0.0) + perf_counter() - stage_started
     if idem:
+        idem_started = perf_counter()
         existing=await db.transactions.find_one({"tenant_id":tenant_id,"idempotency_key":idem})
+        if timing_collector is not None:
+            timing_collector["idempotency_s"] = timing_collector.get("idempotency_s", 0.0) + perf_counter() - idem_started
         if existing:
             _assert_idempotent_tx_matches(existing, tenant_id, member_id, typ, idempotency_minor, account, extra)
-            await _finalize_tx_side_effects(existing, user, suppress_admin_notifications=suppress_admin_notifications, timing_collector=timing_collector)
+            await _finalize_tx_side_effects(existing, user, suppress_admin_notifications=suppress_admin_notifications, suppress_notifications=suppress_notifications, suppress_transaction_audit=suppress_transaction_audit, defer_completion=defer_completion, timing_collector=timing_collector)
             return str(existing["_id"])
     normalized = float(from_minor(amount_minor))
     doc={"tenant_id":tenant_id,"member_id":member_id,"type":typ,"amount":normalized,"amount_minor":amount_minor,"account":account,"transaction_ref":f"BB-{now.strftime('%Y%m%d')}-{uuid.uuid4().hex[:10].upper()}","created_at":now,"idempotency_key":idem,"created_by":str(user.get("_id","system")),"created_by_role":user.get("role","system"),"created_by_phone":user.get("phone"),"side_effects_status":"pending","loan_apply_status":"pending" if typ=="loan_repayment" else "not_applicable",**extra}
@@ -963,7 +997,10 @@ async def insert_tx(tenant_id,member_id,typ,amount,account,user,**extra):
             doc[minor_field] = to_minor(doc[rupee_field])
     if journal: doc["journal_status"]="pending"
     try:
+        mongo_insert_started = perf_counter()
         r=await db.transactions.insert_one(doc)
+        if timing_collector is not None:
+            timing_collector["mongo_insert_s"] = timing_collector.get("mongo_insert_s", 0.0) + perf_counter() - mongo_insert_started
         doc["_id"]=r.inserted_id
     except Exception as exc:
         # Handles concurrent duplicate idempotency submissions without posting twice.
@@ -971,10 +1008,10 @@ async def insert_tx(tenant_id,member_id,typ,amount,account,user,**extra):
             existing=await db.transactions.find_one({"tenant_id":tenant_id,"idempotency_key":idem})
             if existing:
                 _assert_idempotent_tx_matches(existing, tenant_id, member_id, typ, idempotency_minor, account, extra)
-                await _finalize_tx_side_effects(existing, user, suppress_admin_notifications=suppress_admin_notifications, timing_collector=timing_collector)
+                await _finalize_tx_side_effects(existing, user, suppress_admin_notifications=suppress_admin_notifications, suppress_notifications=suppress_notifications, suppress_transaction_audit=suppress_transaction_audit, defer_completion=defer_completion, timing_collector=timing_collector)
                 return str(existing["_id"])
         raise exc
-    await _finalize_tx_side_effects(doc, user, suppress_admin_notifications=suppress_admin_notifications, timing_collector=timing_collector)
+    await _finalize_tx_side_effects(doc, user, suppress_admin_notifications=suppress_admin_notifications, suppress_notifications=suppress_notifications, suppress_transaction_audit=suppress_transaction_audit, defer_completion=defer_completion, timing_collector=timing_collector)
     return str(doc["_id"])
 
 @router.post("/{tenant_id}/contributions")
@@ -1219,7 +1256,7 @@ async def monthly_kist_bulk(tenant_id: str, body: BulkMonthlyKistCreate, user=De
     lock_keys = []
     acquired_keys = []
     lock_seconds = 0.0
-    stage_times = {"journal_s": 0.0, "feed_s": 0.0, "audit_s": 0.0, "notification_s": 0.0, "completion_s": 0.0, "aggregate_s": 0.0, "insert_s": 0.0}
+    stage_times = {"journal_s": 0.0, "feed_s": 0.0, "audit_s": 0.0, "notification_s": 0.0, "completion_s": 0.0, "aggregate_s": 0.0, "insert_s": 0.0, "relation_s": 0.0, "idempotency_s": 0.0, "mongo_insert_s": 0.0}
     phase_started = perf_counter()
     try:
         # Expired lock cleanup is a single indexed batch query rather than one
@@ -1232,6 +1269,46 @@ async def monthly_kist_bulk(tenant_id: str, body: BulkMonthlyKistCreate, user=De
         lock_token = await acquire_operation_locks(lock_keys, lock_ttl)
         lock_seconds += perf_counter() - lock_started
         acquired_keys = list(lock_keys) if lock_token else []
+
+        # Fetch paid history for every selected share in one aggregation instead
+        # of one Mongo aggregate per allocation. Locks are already held, so the
+        # grouped totals remain valid for the duration of this posting batch.
+        share_match_clauses = []
+        legacy_share_key = {}
+        for allocation_id, (owner_id, share_doc) in selected_shares.items():
+            share_no_value = int(share_doc["share_no"])
+            share_match_clauses.append({"member_id": owner_id, "share_id": allocation_id})
+            share_match_clauses.append({"member_id": owner_id, "share_no": share_no_value, "share_id": {"$exists": False}})
+            legacy_share_key[(owner_id, share_no_value)] = allocation_id
+        aggregate_started = perf_counter()
+        paid_history_rows = await db.transactions.aggregate([
+            {"$match": {
+                "tenant_id": tenant_id,
+                "member_id": {"$in": member_ids},
+                "$and": [
+                    {"$or": [{"type": "contribution"}, {"type": "reversal", "original_type": "contribution"}]},
+                    {"$or": [{"payment_category": "monthly_kist"}, {"payment_category": None}, {"payment_category": {"$exists": False}}]},
+                    {"$or": [{"period": body.period}, {"$and": [{"period": None}, {"date": {"$gte": period_start, "$lt": period_end}}]}]},
+                    {"$or": share_match_clauses},
+                ],
+            }},
+            {"$group": {
+                "_id": {"member_id": "$member_id", "share_id": "$share_id", "share_no": "$share_no"},
+                "paid_minor": {"$sum": _mongo_amount_minor_expr()},
+            }},
+        ]).to_list(max(1, len(selected_shares) * 2))
+        already_minor_by_share = {}
+        for paid_row in paid_history_rows:
+            group_key = paid_row.get("_id") or {}
+            resolved_share_id = str(group_key.get("share_id") or "")
+            if not resolved_share_id:
+                try:
+                    resolved_share_id = legacy_share_key.get((str(group_key.get("member_id")), int(group_key.get("share_no")))) or ""
+                except (TypeError, ValueError):
+                    resolved_share_id = ""
+            if resolved_share_id:
+                already_minor_by_share[resolved_share_id] = already_minor_by_share.get(resolved_share_id, 0) + int(paid_row.get("paid_minor", 0) or 0)
+        stage_times["aggregate_s"] += perf_counter() - aggregate_started
 
         for entry in entries:
             for allocation in entry.allocations:
@@ -1253,7 +1330,7 @@ async def monthly_kist_bulk(tenant_id: str, body: BulkMonthlyKistCreate, user=De
                             to_minor(allocation.amount), body.account,
                             {"share_id": allocation.share_id, "payment_category": "monthly_kist", "period": body.period},
                         )
-                        await _finalize_tx_side_effects(existing_tx, user, suppress_admin_notifications=True, timing_collector=stage_times)
+                        await _finalize_tx_side_effects(existing_tx, user, suppress_admin_notifications=True, suppress_notifications=True, suppress_transaction_audit=True, defer_completion=True, relations_prevalidated=True, timing_collector=stage_times)
                         paid_amount_minor = _doc_amount_minor(existing_tx)
                         total_minor += paid_amount_minor
                         paid_members.add(entry.member_id)
@@ -1265,25 +1342,7 @@ async def monthly_kist_bulk(tenant_id: str, body: BulkMonthlyKistCreate, user=De
                         })
                         continue
 
-                paid_query = {
-                    "tenant_id": tenant_id,
-                    "member_id": entry.member_id,
-                    "$and": [
-                        {"$or": [{"type": "contribution"}, {"type": "reversal", "original_type": "contribution"}]},
-                        {"$or": [{"share_id": allocation.share_id}, {"share_no": int(share["share_no"]), "share_id": {"$exists": False}}]},
-                        {"$or": [{"payment_category": "monthly_kist"}, {"payment_category": None}, {"payment_category": {"$exists": False}}]},
-                        {"$or": [{"period": body.period}, {"$and": [{"period": None}, {"date": {"$gte": period_start, "$lt": period_end}}]}]},
-                    ],
-                }
-                # Sum in MongoDB instead of fetching/sorting up to 500 historical
-                # records. This is exact in minor units and does not truncate history.
-                aggregate_started = perf_counter()
-                paid_aggregate = await db.transactions.aggregate([
-                    {"$match": paid_query},
-                    {"$group": {"_id": None, "paid_minor": {"$sum": _mongo_amount_minor_expr()}}},
-                ]).to_list(1)
-                stage_times["aggregate_s"] += perf_counter() - aggregate_started
-                already_minor = int((paid_aggregate[0] if paid_aggregate else {}).get("paid_minor", 0) or 0)
+                already_minor = int(already_minor_by_share.get(allocation.share_id, 0))
 
                 # Recalculate under the per-share operation lock so a stale status
                 # screen or concurrent administrator cannot over-collect the share.
@@ -1307,7 +1366,7 @@ async def monthly_kist_bulk(tenant_id: str, body: BulkMonthlyKistCreate, user=De
                     expected_amount=expected, paid_amount=after, status=status, date=dt,
                     note=body.note, idempotency_key=share_idem,
                     idempotency_amount_minor=to_minor(allocation.amount),
-                    _suppress_admin_notifications=True, _timing_collector=stage_times,
+                    _suppress_admin_notifications=True, _suppress_notifications=True, _suppress_transaction_audit=True, _defer_side_effect_completion=True, _relations_prevalidated=True, _timing_collector=stage_times,
                 )
                 stage_times["insert_s"] += perf_counter() - insert_started
                 total_minor += post_minor
@@ -1324,10 +1383,28 @@ async def monthly_kist_bulk(tenant_id: str, body: BulkMonthlyKistCreate, user=De
     penalties = []
     penalty_started = perf_counter()
     for mid in paid_members:
-        pid = await _post_bc_penalty_once(tenant_id, mid, body.period, dt, body.account, user, body.note, suppress_admin_notifications=True, timing_collector=stage_times)
+        pid = await _post_bc_penalty_once(tenant_id, mid, body.period, dt, body.account, user, body.note, suppress_admin_notifications=True, suppress_notifications=True, suppress_transaction_audit=True, defer_completion=True, relations_prevalidated=True, timing_collector=stage_times)
         if pid:
             penalties.append(pid)
     penalty_seconds = perf_counter() - penalty_started
+
+    # Every transaction's journal/feed has completed successfully. Mark the batch
+    # complete with one scoped write instead of one completion update per row.
+    completion_ids = []
+    for row in results:
+        try: completion_ids.append(parse_oid(row["id"]))
+        except Exception: pass
+    for pid in penalties:
+        try: completion_ids.append(parse_oid(pid))
+        except Exception: pass
+    completion_ids = list({str(x): x for x in completion_ids}.values())
+    if completion_ids:
+        completion_started = perf_counter()
+        await db.transactions.update_many(
+            {"tenant_id": tenant_id, "_id": {"$in": completion_ids}, "side_effects_status": {"$ne": "complete"}},
+            {"$set": {"side_effects_status": "complete", "side_effects_completed_at": datetime.now(timezone.utc)}},
+        )
+        stage_times["completion_s"] += perf_counter() - completion_started
 
     if results:
         # A bulk monthly collection should produce one admin-facing summary, not
@@ -1365,19 +1442,35 @@ async def monthly_kist_bulk(tenant_id: str, body: BulkMonthlyKistCreate, user=De
             {"$set": {"title": summary_doc["title"], "body": summary_doc["body"], "updated_at": datetime.now(timezone.utc)}, "$setOnInsert": {"tenant_id": tenant_id, "recipient_role": "admin", "created_at": summary_doc["created_at"], "source_key": summary_key, "read": False}},
             upsert=True,
         )
+        penalty_total_minor = 0
+        if penalties:
+            penalty_oids = []
+            for pid in penalties:
+                try: penalty_oids.append(parse_oid(pid))
+                except Exception: pass
+            if penalty_oids:
+                penalty_rows = await db.transactions.find(
+                    {"tenant_id": tenant_id, "_id": {"$in": penalty_oids}},
+                    {"amount_minor": 1, "amount": 1},
+                ).to_list(len(penalty_oids))
+                penalty_total_minor = sum(_doc_amount_minor(row) for row in penalty_rows)
+        audit_fingerprint = hashlib.sha256(",".join(sorted(str(row["id"]) for row in results)).encode("utf-8")).hexdigest()[:24]
         await audit(
             tenant_id, user, "MONTHLY_KIST_BULK_POSTED", "tenant", tenant_id,
-            {"period": body.period, "entries": len(results), "amount": float(from_minor(total_minor))},
-            event_key=f"monthly-kist-bulk:{tenant_id}:{body.idempotency_key}" if body.idempotency_key else None,
+            {"period": body.period, "entries": len(results), "members": len(paid_members),
+             "amount": float(from_minor(total_minor)), "penalty_entries": len(penalties),
+             "penalty_amount": float(from_minor(penalty_total_minor))},
+            event_key=f"monthly-kist-bulk:{tenant_id}:{body.period}:{body.idempotency_key or audit_fingerprint}",
         )
 
     elapsed = perf_counter() - started
     # Log timings only; do not log member IDs, payment amounts, or request payloads.
     if elapsed >= 1.0:
         logger.warning(
-            "Slow monthly_kist_bulk tenant=%s allocations=%d members=%d results=%d elapsed_s=%.3f posting_s=%.3f lock_s=%.3f penalties_s=%.3f aggregate_s=%.3f insert_s=%.3f journal_s=%.3f feed_s=%.3f audit_s=%.3f notification_s=%.3f completion_s=%.3f",
+            "Slow monthly_kist_bulk tenant=%s allocations=%d members=%d results=%d elapsed_s=%.3f posting_s=%.3f lock_s=%.3f penalties_s=%.3f aggregate_s=%.3f insert_s=%.3f mongo_insert_s=%.3f relation_s=%.3f idempotency_s=%.3f journal_s=%.3f feed_s=%.3f audit_s=%.3f notification_s=%.3f completion_s=%.3f",
             tenant_id, len(seen), len(entries), len(results), elapsed, posting_seconds, lock_seconds, penalty_seconds,
-            stage_times["aggregate_s"], stage_times["insert_s"], stage_times["journal_s"], stage_times["feed_s"],
+            stage_times["aggregate_s"], stage_times["insert_s"], stage_times["mongo_insert_s"], stage_times["relation_s"],
+            stage_times["idempotency_s"], stage_times["journal_s"], stage_times["feed_s"],
             stage_times["audit_s"], stage_times["notification_s"], stage_times["completion_s"],
         )
     return {
