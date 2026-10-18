@@ -454,16 +454,18 @@ function Admin(){const {user}=useStore();const adminLocation=useLocation();const
     for(const [shareId,target] of targetByShare){
       const sh=currentByShare.get(shareId);if(!sh)continue;
       const missing=Math.min(Math.max(0,target-Number(sh.paid_amount||0)),Number(sh.remaining_amount||0));
-      if(missing>0.009)retryEntries.push({member_id:sh.member_id,allocations:[{share_id:shareId,amount:missing}]});
+      // Keep the original amount for this idempotency key. The backend binds a
+      // key to the original request amount; retrying only the calculated delta
+      // can be rejected as an idempotency mismatch after a partial/uncertain write.
+      const originalAmount=Number(bulkAmounts[shareId]||0);
+      if(missing>0.009&&originalAmount>0)retryEntries.push({member_id:sh.member_id,allocations:[{share_id:shareId,amount:originalAmount}]});
     }
     let retryError='';
     if(retryEntries.length){
-      // Retry one share at a time. A single transient failure must not prevent
-      // unrelated remaining shares from being reconciled in the same operation.
-      for(const entry of retryEntries){
-        try{await api.monthlyKistBulk(tid,{idempotency_key:operationKeys.current.bulk,period:paymentPeriod,entries:[entry],account:paymentAccount,date:paymentDate,note:paymentNote});}
-        catch(e:any){retryError=[retryError,e?.message||'Retry request returned an error.'].filter(Boolean).join(' · ');}
-      }
+      // Retry all still-missing shares in one bounded bulk request, not one HTTP
+      // request per share. Per-share idempotency keys keep already-posted rows safe.
+      try{await api.monthlyKistBulk(tid,{idempotency_key:operationKeys.current.bulk,period:paymentPeriod,entries:retryEntries,account:paymentAccount,date:paymentDate,note:paymentNote});}
+      catch(e:any){retryError=e?.message||'Bulk retry request returned an error.';}
     }
     let finalStatus=verify;
     if(retryEntries.length){
