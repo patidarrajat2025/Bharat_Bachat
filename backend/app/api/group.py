@@ -725,8 +725,8 @@ def _due_overdue_days(payment_dt:datetime, due_day:int, year:int|None=None, mont
     due=datetime(y,m,due_day,tzinfo=timezone.utc)
     return max(0,(payment_dt.date()-due.date()).days)
 
-async def _post_bc_penalty_once(tenant_id:str,member_id:str,period:str,payment_dt:datetime,account:str,user,note:str="", *, suppress_admin_notifications: bool = False, suppress_notifications: bool = False, suppress_transaction_audit: bool = False, defer_completion: bool = False, relations_prevalidated: bool = False, timing_collector: dict | None = None):
-    db=get_db(); tenant=await group_settings(tenant_id)
+async def _post_bc_penalty_once(tenant_id:str,member_id:str,period:str,payment_dt:datetime,account:str,user,note:str="", *, suppress_admin_notifications: bool = False, suppress_notifications: bool = False, suppress_transaction_audit: bool = False, defer_completion: bool = False, relations_prevalidated: bool = False, timing_collector: dict | None = None, settings_snapshot: dict | None = None):
+    db=get_db(); tenant=settings_snapshot if settings_snapshot is not None else await group_settings(tenant_id)
     due_day=int(tenant.get("bc_due_date",10) or 10); per_day=float(tenant.get("bc_per_day_penalty",0) or 0)
     y,m=map(int,period.split("-")); overdue=_due_overdue_days(payment_dt,due_day,y,m)
     chargeable_days=bc_penalty_chargeable_days(overdue, 10)  # 10-day grace period; charge from day 11 onward.
@@ -1496,7 +1496,9 @@ async def monthly_kist_bulk(tenant_id: str, body: BulkMonthlyKistCreate, user=De
 
         allocation_jobs = [post_one_allocation(entry, allocation)
                            for entry in entries for allocation in entry.allocations]
+        allocation_fanout_started = perf_counter()
         allocation_outcomes = await asyncio.gather(*allocation_jobs, return_exceptions=True)
+        allocation_fanout_wall_s = perf_counter() - allocation_fanout_started
         failures = [x for x in allocation_outcomes if isinstance(x, BaseException)]
         successful_outcomes = [x for x in allocation_outcomes if x is not None and not isinstance(x, BaseException)]
         # Even if one allocation failed, finish recoverable side effects for every
@@ -1507,11 +1509,17 @@ async def monthly_kist_bulk(tenant_id: str, body: BulkMonthlyKistCreate, user=De
             if is_new:
                 try: new_tx_ids.append(parse_oid(row["id"]))
                 except Exception: pass
+        tx_reread_wall_s = 0.0
+        journal_feed_finalize_wall_s = 0.0
         if new_tx_ids:
+            tx_reread_started = perf_counter()
             new_tx_docs = await db.transactions.find(
                 {"tenant_id":tenant_id, "_id":{"$in":new_tx_ids}},
             ).to_list(len(new_tx_ids))
+            tx_reread_wall_s = perf_counter() - tx_reread_started
+            finalize_started = perf_counter()
             await _finalize_monthly_kist_batch(new_tx_docs, timing_collector=stage_times)
+            journal_feed_finalize_wall_s = perf_counter() - finalize_started
         if failures:
             # Successful source rows have had journals/feed repaired before we
             # surface the first failed allocation; idempotent retry remains safe.
@@ -1531,7 +1539,7 @@ async def monthly_kist_bulk(tenant_id: str, body: BulkMonthlyKistCreate, user=De
     penalty_semaphore = asyncio.Semaphore(16)
     async def post_one_penalty(mid):
         async with penalty_semaphore:
-            return await _post_bc_penalty_once(tenant_id, mid, body.period, dt, body.account, user, body.note, suppress_admin_notifications=True, suppress_notifications=True, suppress_transaction_audit=True, defer_completion=True, relations_prevalidated=True, timing_collector=stage_times)
+            return await _post_bc_penalty_once(tenant_id, mid, body.period, dt, body.account, user, body.note, suppress_admin_notifications=True, suppress_notifications=True, suppress_transaction_audit=True, defer_completion=True, relations_prevalidated=True, timing_collector=stage_times, settings_snapshot=tenant)
     penalty_outcomes = await asyncio.gather(*(post_one_penalty(mid) for mid in paid_members), return_exceptions=True)
     penalty_failures = [x for x in penalty_outcomes if isinstance(x, BaseException)]
     if penalty_failures:
@@ -1618,8 +1626,12 @@ async def monthly_kist_bulk(tenant_id: str, body: BulkMonthlyKistCreate, user=De
     # Log timings only; do not log member IDs, payment amounts, or request payloads.
     if elapsed >= 1.0:
         logger.warning(
-            "Slow monthly_kist_bulk tenant=%s allocations=%d members=%d results=%d elapsed_s=%.3f posting_wall_s=%.3f lock_wall_s=%.3f penalties_wall_s=%.3f aggregate_wall_s=%.3f idempotency_batch_wall_s=%.3f insert_accum_s=%.3f mongo_insert_accum_s=%.3f idempotency_accum_s=%.3f journal_accum_s=%.3f feed_accum_s=%.3f audit_accum_s=%.3f notification_accum_s=%.3f completion_wall_s=%.3f journal_batch_wall_s=%.3f feed_batch_wall_s=%.3f post_concurrency=%d",
-            tenant_id, len(seen), len(entries), len(results), elapsed, posting_seconds, lock_seconds, penalty_seconds,
+            "Slow monthly_kist_bulk tenant=%s allocations=%d members=%d results=%d elapsed_s=%.3f posting_wall_s=%.3f allocation_fanout_wall_s=%.3f tx_reread_wall_s=%.3f journal_feed_finalize_wall_s=%.3f lock_wall_s=%.3f penalties_wall_s=%.3f aggregate_wall_s=%.3f idempotency_batch_wall_s=%.3f insert_accum_s=%.3f mongo_insert_accum_s=%.3f idempotency_accum_s=%.3f journal_accum_s=%.3f feed_accum_s=%.3f audit_accum_s=%.3f notification_accum_s=%.3f completion_wall_s=%.3f journal_batch_wall_s=%.3f feed_batch_wall_s=%.3f post_concurrency=%d",
+            tenant_id, len(seen), len(entries), len(results), elapsed, posting_seconds,
+            allocation_fanout_wall_s if "allocation_fanout_wall_s" in locals() else 0.0,
+            tx_reread_wall_s if "tx_reread_wall_s" in locals() else 0.0,
+            journal_feed_finalize_wall_s if "journal_feed_finalize_wall_s" in locals() else 0.0,
+            lock_seconds, penalty_seconds,
             stage_times["aggregate_s"], idempotency_lookup_wall_s if "idempotency_lookup_wall_s" in locals() else 0.0,
             stage_times["insert_s"], stage_times["mongo_insert_s"], stage_times["idempotency_s"],
             stage_times["journal_s"], stage_times["feed_s"], stage_times["audit_s"],
