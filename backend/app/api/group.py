@@ -747,19 +747,121 @@ async def _post_bc_penalty_once(tenant_id:str,member_id:str,period:str,payment_d
         await _finalize_tx_side_effects(existing,user,suppress_admin_notifications=suppress_admin_notifications,suppress_notifications=suppress_notifications,suppress_transaction_audit=suppress_transaction_audit,defer_completion=defer_completion,timing_collector=timing_collector)
         return str(existing["_id"])
 
-async def _feed_upsert(doc, *, source_type="transaction"):
-    db=get_db()
+def _build_feed_document(doc, *, source_type="transaction"):
+    """Build the canonical materialized-feed row without performing I/O."""
     raw_amount=float(doc.get("amount",0) or 0)
     source_minor=int(doc["amount_minor"]) if doc.get("amount_minor") is not None else to_minor(raw_amount)
     amount_minor=-abs(source_minor) if source_type=="expense" else source_minor
     amount=float(from_minor(amount_minor))
     feed={"source_key":financial_feed_source_key(source_type, doc.get('_id')),"source_type":source_type,"source_id":str(doc.get("_id")),"transaction_ref":doc.get("transaction_ref"),"tenant_id":doc.get("tenant_id"),"member_id":str(doc.get("member_id")) if doc.get("member_id") else None,"type":doc.get("type","transaction"),"amount":amount,"amount_minor":amount_minor,"account":doc.get("account","cash"),"date":doc.get("date") or doc.get("created_at"),"created_at":doc.get("created_at") or doc.get("date"),"note":doc.get("note","") or "","payment_category":doc.get("payment_category"),"penalty_category":doc.get("penalty_category"),"original_type":doc.get("original_type"),"reversal_of":doc.get("reversal_of"),"period":doc.get("period"),"status":doc.get("status"),"loan_id":str(doc.get("loan_id")) if doc.get("loan_id") else None,"loan_interest_collected":float(doc.get("loan_interest_collected",doc.get("interest",0)) or 0),"loan_interest_minor":doc.get("loan_interest_minor"),"loan_penalty_collected":float(doc.get("loan_penalty_collected",0) or 0),"loan_penalty_minor":doc.get("loan_penalty_minor"),"bc_regular_kist_penalty":float(doc.get("bc_regular_kist_penalty",0) or 0),"bc_penalty_minor":doc.get("bc_penalty_minor"),"other_interest_value":float(doc.get("other_interest",doc.get("other_interest_value",0)) or 0),"other_interest_minor":doc.get("other_interest_minor"),"other_penalty_value":float(doc.get("other_penalty",doc.get("other_penalty_value",0)) or 0),"other_penalty_minor":doc.get("other_penalty_minor"),"interest":float(doc.get("interest",0) or 0),"interest_minor":doc.get("interest_minor"),"principal":float(doc.get("principal",0) or 0),"principal_minor":doc.get("principal_minor"),"share_no":doc.get("share_no"),"share_id":str(doc.get("share_id")) if doc.get("share_id") else None,"expense_id":str(doc.get("expense_id")) if doc.get("expense_id") else None,"category":doc.get("category") if source_type=="expense" else None}
+    return feed
+
+
+async def _feed_upsert(doc, *, source_type="transaction"):
+    db=get_db()
+    feed=_build_feed_document(doc, source_type=source_type)
     # MongoDB rejects the same path in $set and $setOnInsert. created_at is
-    # immutable after insertion, so keep it out of $set exactly as in backfill.
+    # immutable after insertion, so keep it out of $set and initialize on insert.
     created_at=feed.pop("created_at",None)
     update={"$set":feed}
     if created_at is not None: update["$setOnInsert"]={"created_at":created_at}
     await db.financial_feed.update_one({"tenant_id":feed.get("tenant_id"),"source_key":feed["source_key"]},update,upsert=True)
+
+
+async def _finalize_monthly_kist_batch(docs: list[dict], timing_collector: dict | None = None):
+    """Batch journal/feed side effects for newly inserted monthly kist rows.
+
+    Source transactions are inserted first and remain marked pending until all
+    journals are verified balanced and the idempotent feed upserts succeed. If a
+    batch write partially fails, a retry can repair pending rows from the source
+    transaction records; we never mark an unverified journal as posted.
+    """
+    if not docs:
+        return
+    from pymongo import UpdateOne
+    db=get_db()
+    now=datetime.now(timezone.utc)
+    journal_ops=[]
+    expected_by_key={}
+    no_journal_ids=[]
+    for doc in docs:
+        journal=build_journal(doc)
+        if not journal:
+            no_journal_ids.append(doc["_id"])
+            continue
+        source_key=f"tx:{doc['_id']}"
+        expected_by_key[source_key]=(doc, journal)
+        journal_doc={
+            "tenant_id":doc.get("tenant_id"), "source_type":"transaction",
+            "source_id":str(doc["_id"]), "source_key":source_key, **journal,
+            "created_at":doc.get("created_at") or now,
+        }
+        expected_query={
+            "tenant_id":doc.get("tenant_id"), "source_key":source_key,
+            "balanced":True,
+            "debit_minor":int(journal.get("debit_minor", -1)),
+            "credit_minor":int(journal.get("credit_minor", -2)),
+        }
+        journal_ops.append(UpdateOne(
+            expected_query,
+            {"$set":{"status":"posted", "posted_at":now}, "$setOnInsert":journal_doc},
+            upsert=True,
+        ))
+
+    journal_batch_started=perf_counter()
+    bulk_error=None
+    if journal_ops:
+        try:
+            await db.journal_entries.bulk_write(journal_ops, ordered=False)
+        except Exception as exc:
+            # A duplicate-key can mean an existing source journal did not match
+            # expected totals. Verify every source below before deciding whether
+            # this was a harmless concurrent upsert or a real accounting conflict.
+            bulk_error=exc
+        stored_rows=await db.journal_entries.find({
+            "tenant_id":docs[0].get("tenant_id"),
+            "source_key":{"$in":list(expected_by_key)},
+        }).to_list(len(expected_by_key))
+        stored_by_key={row.get("source_key"):row for row in stored_rows}
+        invalid=[]
+        for source_key,(doc,journal) in expected_by_key.items():
+            stored=stored_by_key.get(source_key)
+            if (not stored or not stored.get("balanced")
+                or int(stored.get("debit_minor",-1)) != int(stored.get("credit_minor",-2))
+                or int(stored.get("debit_minor",-1)) != int(journal.get("debit_minor",-2))
+                or stored.get("status") != "posted"):
+                invalid.append(source_key)
+        if invalid:
+            raise RuntimeError(f"Monthly kist journal batch failed verification for {len(invalid)} transaction(s)") from bulk_error
+        await db.transactions.update_many(
+            {"tenant_id":docs[0].get("tenant_id"), "_id":{"$in":[doc["_id"] for doc,journal in expected_by_key.values()]}},
+            {"$set":{"journal_status":"posted"}},
+        )
+    if timing_collector is not None:
+        timing_collector["journal_batch_wall_s"] = timing_collector.get("journal_batch_wall_s", 0.0) + perf_counter() - journal_batch_started
+    if no_journal_ids:
+        await db.transactions.update_many(
+            {"tenant_id":docs[0].get("tenant_id"), "_id":{"$in":no_journal_ids}, "journal_status":"pending"},
+            {"$set":{"journal_status":"not_applicable"}},
+        )
+
+    feed_batch_started=perf_counter()
+    feed_ops=[]
+    for doc in docs:
+        feed=_build_feed_document(doc)
+        created_at=feed.pop("created_at",None)
+        update={"$set":feed}
+        if created_at is not None:
+            update["$setOnInsert"]={"created_at":created_at}
+        feed_ops.append(UpdateOne(
+            {"tenant_id":feed.get("tenant_id"), "source_key":feed["source_key"]},
+            update, upsert=True,
+        ))
+    if feed_ops:
+        await db.financial_feed.bulk_write(feed_ops, ordered=False)
+    if timing_collector is not None:
+        timing_collector["feed_batch_wall_s"] = timing_collector.get("feed_batch_wall_s", 0.0) + perf_counter() - feed_batch_started
+
 
 async def _persist_verified_posted_journal(doc: dict, journal: dict):
     """Upsert/verify/post a journal in one atomic round trip, then mark source posted.
@@ -934,6 +1036,7 @@ async def insert_tx(tenant_id,member_id,typ,amount,account,user,**extra):
     relations_prevalidated = bool(extra.pop("_relations_prevalidated", False))
     timing_collector = extra.pop("_timing_collector", None)
     idempotency_prechecked = bool(extra.pop("_idempotency_prechecked", False))
+    defer_bulk_side_effects = bool(extra.pop("_defer_bulk_side_effects", False))
     amount_minor = to_minor(amount or 0)
     idempotency_minor = int(extra.get("idempotency_amount_minor", amount_minor))
     if not relations_prevalidated:
@@ -1013,7 +1116,8 @@ async def insert_tx(tenant_id,member_id,typ,amount,account,user,**extra):
                 await _finalize_tx_side_effects(existing, user, suppress_admin_notifications=suppress_admin_notifications, suppress_notifications=suppress_notifications, suppress_transaction_audit=suppress_transaction_audit, defer_completion=defer_completion, timing_collector=timing_collector)
                 return str(existing["_id"])
         raise exc
-    await _finalize_tx_side_effects(doc, user, suppress_admin_notifications=suppress_admin_notifications, suppress_notifications=suppress_notifications, suppress_transaction_audit=suppress_transaction_audit, defer_completion=defer_completion, timing_collector=timing_collector)
+    if not defer_bulk_side_effects:
+        await _finalize_tx_side_effects(doc, user, suppress_admin_notifications=suppress_admin_notifications, suppress_notifications=suppress_notifications, suppress_transaction_audit=suppress_transaction_audit, defer_completion=defer_completion, timing_collector=timing_collector)
     return str(doc["_id"])
 
 @router.post("/{tenant_id}/contributions")
@@ -1258,7 +1362,7 @@ async def monthly_kist_bulk(tenant_id: str, body: BulkMonthlyKistCreate, user=De
     lock_keys = []
     acquired_keys = []
     lock_seconds = 0.0
-    stage_times = {"journal_s": 0.0, "feed_s": 0.0, "audit_s": 0.0, "notification_s": 0.0, "completion_s": 0.0, "aggregate_s": 0.0, "insert_s": 0.0, "relation_s": 0.0, "idempotency_s": 0.0, "mongo_insert_s": 0.0}
+    stage_times = {"journal_s": 0.0, "feed_s": 0.0, "audit_s": 0.0, "notification_s": 0.0, "completion_s": 0.0, "aggregate_s": 0.0, "insert_s": 0.0, "relation_s": 0.0, "idempotency_s": 0.0, "mongo_insert_s": 0.0, "journal_batch_wall_s": 0.0, "feed_batch_wall_s": 0.0}
     phase_started = perf_counter()
     try:
         # Expired lock cleanup is a single indexed batch query rather than one
@@ -1358,7 +1462,7 @@ async def monthly_kist_bulk(tenant_id: str, body: BulkMonthlyKistCreate, user=De
                         return {"id": str(existing_tx["_id"]), "member_id": entry.member_id,
                                 "share_id": allocation.share_id, "share_no": int(share["share_no"]),
                                 "amount": float(from_minor(paid_amount_minor)),
-                                "status": existing_tx.get("status", "posted")}, paid_amount_minor, entry.member_id
+                                "status": existing_tx.get("status", "posted")}, paid_amount_minor, entry.member_id, False
 
                 already_minor = int(already_minor_by_share.get(allocation.share_id, 0))
                 try:
@@ -1384,24 +1488,36 @@ async def monthly_kist_bulk(tenant_id: str, body: BulkMonthlyKistCreate, user=De
                     _suppress_admin_notifications=True, _suppress_notifications=True,
                     _suppress_transaction_audit=True, _defer_side_effect_completion=True,
                     _relations_prevalidated=True, _idempotency_prechecked=bool(share_idem),
-                    _timing_collector=stage_times,
+                    _defer_bulk_side_effects=True, _timing_collector=stage_times,
                 )
                 stage_times["insert_s"] += perf_counter() - insert_started
                 return {"id": txid, "member_id": entry.member_id, "share_id": allocation.share_id,
-                        "share_no": int(share["share_no"]), "amount": post_amount, "status": status}, post_minor, entry.member_id
+                        "share_no": int(share["share_no"]), "amount": post_amount, "status": status}, post_minor, entry.member_id, True
 
         allocation_jobs = [post_one_allocation(entry, allocation)
                            for entry in entries for allocation in entry.allocations]
         allocation_outcomes = await asyncio.gather(*allocation_jobs, return_exceptions=True)
         failures = [x for x in allocation_outcomes if isinstance(x, BaseException)]
+        successful_outcomes = [x for x in allocation_outcomes if x is not None and not isinstance(x, BaseException)]
+        # Even if one allocation failed, finish recoverable side effects for every
+        # successfully inserted row before returning the first error.
+        new_tx_ids=[]
+        for outcome in successful_outcomes:
+            row, amount_minor, member_id, is_new = outcome
+            if is_new:
+                try: new_tx_ids.append(parse_oid(row["id"]))
+                except Exception: pass
+        if new_tx_ids:
+            new_tx_docs = await db.transactions.find(
+                {"tenant_id":tenant_id, "_id":{"$in":new_tx_ids}},
+            ).to_list(len(new_tx_ids))
+            await _finalize_monthly_kist_batch(new_tx_docs, timing_collector=stage_times)
         if failures:
-            # Transactions already durably inserted are left recoverable by their
-            # idempotency keys and pending side-effect markers; do not mask failures.
+            # Successful source rows have had journals/feed repaired before we
+            # surface the first failed allocation; idempotent retry remains safe.
             raise failures[0]
-        for outcome in allocation_outcomes:
-            if outcome is None:
-                continue
-            row, amount_minor, member_id = outcome
+        for outcome in successful_outcomes:
+            row, amount_minor, member_id, _is_new = outcome
             results.append(row)
             total_minor += amount_minor
             paid_members.add(member_id)
@@ -1502,12 +1618,13 @@ async def monthly_kist_bulk(tenant_id: str, body: BulkMonthlyKistCreate, user=De
     # Log timings only; do not log member IDs, payment amounts, or request payloads.
     if elapsed >= 1.0:
         logger.warning(
-            "Slow monthly_kist_bulk tenant=%s allocations=%d members=%d results=%d elapsed_s=%.3f posting_wall_s=%.3f lock_wall_s=%.3f penalties_wall_s=%.3f aggregate_wall_s=%.3f idempotency_batch_wall_s=%.3f insert_accum_s=%.3f mongo_insert_accum_s=%.3f idempotency_accum_s=%.3f journal_accum_s=%.3f feed_accum_s=%.3f audit_accum_s=%.3f notification_accum_s=%.3f completion_wall_s=%.3f post_concurrency=%d",
+            "Slow monthly_kist_bulk tenant=%s allocations=%d members=%d results=%d elapsed_s=%.3f posting_wall_s=%.3f lock_wall_s=%.3f penalties_wall_s=%.3f aggregate_wall_s=%.3f idempotency_batch_wall_s=%.3f insert_accum_s=%.3f mongo_insert_accum_s=%.3f idempotency_accum_s=%.3f journal_accum_s=%.3f feed_accum_s=%.3f audit_accum_s=%.3f notification_accum_s=%.3f completion_wall_s=%.3f journal_batch_wall_s=%.3f feed_batch_wall_s=%.3f post_concurrency=%d",
             tenant_id, len(seen), len(entries), len(results), elapsed, posting_seconds, lock_seconds, penalty_seconds,
             stage_times["aggregate_s"], idempotency_lookup_wall_s if "idempotency_lookup_wall_s" in locals() else 0.0,
             stage_times["insert_s"], stage_times["mongo_insert_s"], stage_times["idempotency_s"],
             stage_times["journal_s"], stage_times["feed_s"], stage_times["audit_s"],
             stage_times["notification_s"], stage_times["completion_s"],
+            stage_times["journal_batch_wall_s"], stage_times["feed_batch_wall_s"],
             post_concurrency if "post_concurrency" in locals() else 0,
         )
     return {
