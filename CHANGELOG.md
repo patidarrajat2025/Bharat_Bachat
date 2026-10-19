@@ -33,3 +33,10 @@ No frontend source or API response schema was intentionally changed. No financia
 - Added a direct dashboard Quick Action that opens the Admin Loans tab and automatically opens the Create Loan form for the selected member and amount. Existing Loan Management action remains available.
 - Fixed the Save All Kist "This collection" summary card so large currency amounts can wrap/scale within the card instead of being clipped.
 - No existing financial records were modified or backfilled by this patch.
+
+## Loan UI modernization (2026-10-19)
+- Added count pills to Admin Control Payments, Loans, and Expenses tabs.
+- Restyled Admin Control loan history with semantic Active/Overdue/Closed pills, clearer principal/interest summaries, and a high-contrast Create Loan action card.
+- Refined Active Loans Management metrics with an amber Total Outstanding card, clean borders/shadows, larger expandable touch targets, status pills, and rupee-based repayment progress labels.
+- Reorganized Create Loan form into Loan Terms and Disbursement Details groups, upgraded the credit eligibility/financial summary panel, and increased account/date input tap targets.
+- Added Hindi localization for the new loan UI strings; existing loan calculation and API posting logic was intentionally preserved.

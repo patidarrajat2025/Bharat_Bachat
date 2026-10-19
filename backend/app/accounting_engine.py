@@ -66,6 +66,14 @@ def allocate_minor(total_minor: int, numerator: int, denominator: int) -> int:
     return int(value.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
 
+def contractual_interest_accrued_minor(total_interest_minor: int, elapsed_months: int, tenure_months: int) -> int:
+    """Return cumulative scheduled simple interest through a month, capped at contract total."""
+    total = max(0, int(total_interest_minor))
+    tenure = max(1, int(tenure_months))
+    elapsed = max(0, min(tenure, int(elapsed_months)))
+    return min(total, allocate_minor(total, elapsed, tenure))
+
+
 def assert_idempotent_match(existing: dict, *, tenant_id: str, member_id, typ: str,
                             amount_minor: int, account, extra: dict) -> None:
     """Ensure a retry key is not reused for a materially different operation."""

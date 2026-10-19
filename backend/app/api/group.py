@@ -12,7 +12,7 @@ from ..db import get_db, backfill_financial_feed
 from ..deps import current_user, tenant_guard, require_roles, parse_oid
 from ..models import *
 from ..services import tenant_summary, analytics
-from ..accounting_engine import monthly_overdue_penalty_minor, to_minor, from_minor, simple_interest_minor, allocate_kist_payment, profit_components, net_profit_from_buckets_minor, assert_idempotent_match, allocate_minor, financial_feed_source_key, bc_penalty_chargeable_days
+from ..accounting_engine import monthly_overdue_penalty_minor, to_minor, from_minor, simple_interest_minor, contractual_interest_accrued_minor, allocate_kist_payment, profit_components, net_profit_from_buckets_minor, assert_idempotent_match, allocate_minor, financial_feed_source_key, bc_penalty_chargeable_days
 from ..journal import build_journal, build_expense_journal, reverse_journal
 from ..audit import audit
 from ..core.config import settings
@@ -2660,7 +2660,8 @@ async def _apply_loan_repayment_once(tenant_id: str, tx: dict):
     accrued_interest_minor=int(updated["interest_accrued_minor"]) if updated.get("interest_accrued_minor") is not None else to_minor(updated.get("interest_accrued",updated.get("expected_interest",0)) or 0)
     interest_paid_minor=int(updated["interest_paid_minor"]) if updated.get("interest_paid_minor") is not None else to_minor(updated.get("interest_paid",0) or 0)
     interest_remaining_minor=max(0,accrued_interest_minor-interest_paid_minor)
-    if outstanding_minor<=0 and interest_remaining_minor<=0:
+    expected_interest_minor=int(updated["expected_interest_minor"]) if updated.get("expected_interest_minor") is not None else to_minor(updated.get("expected_interest",0) or 0)
+    if outstanding_minor<=0 and interest_paid_minor >= expected_interest_minor:
         await db.loans.update_one({"_id":loan["_id"],"tenant_id":tenant_id},{"$set":{"status":"closed","closed_at":updated.get("closed_at") or datetime.now(timezone.utc)}})
     await db.transactions.update_one({"_id":tx["_id"],"tenant_id":tenant_id},{"$set":{"loan_apply_status":"applied","loan_applied_at":datetime.now(timezone.utc)}})
     return await db.loans.find_one({"_id":loan["_id"],"tenant_id":tenant_id})
@@ -2739,9 +2740,9 @@ async def loan_payment(tenant_id:str,body:LoanPayment,user=Depends(admin_user)):
                     await _finalize_tx_side_effects(existing,user)
                     loan_existing=await _apply_loan_repayment_once(tenant_id,existing)
                     outstanding_minor=max(0,(int(loan_existing["principal_minor"]) if loan_existing.get("principal_minor") is not None else to_minor(loan_existing.get("principal",0) or 0))-(int(loan_existing["principal_paid_minor"]) if loan_existing.get("principal_paid_minor") is not None else to_minor(loan_existing.get("principal_paid",0) or 0)))
-                    accrued_interest_minor=int(loan_existing["interest_accrued_minor"]) if loan_existing.get("interest_accrued_minor") is not None else to_minor(loan_existing.get("interest_accrued",loan_existing.get("expected_interest",0)) or 0)
+                    expected_interest_minor=int(loan_existing["expected_interest_minor"]) if loan_existing.get("expected_interest_minor") is not None else to_minor(loan_existing.get("expected_interest",0) or 0)
                     interest_paid_minor=int(loan_existing["interest_paid_minor"]) if loan_existing.get("interest_paid_minor") is not None else to_minor(loan_existing.get("interest_paid",0) or 0)
-                    interest_remaining_minor=max(0,accrued_interest_minor-interest_paid_minor)
+                    interest_remaining_minor=max(0,expected_interest_minor-interest_paid_minor)
                     return {"id":str(existing["_id"]),"amount":float(from_minor(int(existing["amount_minor"]) if existing.get("amount_minor") is not None else to_minor(existing.get("amount",0) or 0))),"principal":float(from_minor(int(existing["principal_repaid_minor"]) if existing.get("principal_repaid_minor") is not None else to_minor(existing.get("principal_repaid",0) or 0))),"interest":float(from_minor(int(existing["loan_interest_minor"]) if existing.get("loan_interest_minor") is not None else to_minor(existing.get("loan_interest_collected",0) or 0))),"penalty":float(from_minor(int(existing["loan_penalty_minor"]) if existing.get("loan_penalty_minor") is not None else to_minor(existing.get("loan_penalty_collected",0) or 0))),"principal_remaining":float(from_minor(outstanding_minor)),"interest_remaining":float(from_minor(interest_remaining_minor))}
             finally:
                 await release_operation_lock(idem_lock_key)
@@ -2758,33 +2759,33 @@ async def loan_payment(tenant_id:str,body:LoanPayment,user=Depends(admin_user)):
         rate=loan.get("interest_rate",tenant.get("loan_interest_rate_per_month",2))
         due_day=int(loan.get("loan_due_date",tenant.get("loan_due_date",10)) or 10)
         month_key=dt.strftime("%Y-%m"); interest_key=f"loan-interest:{body.loan_id}:{month_key}"; penalty_key=f"loan-penalty:{body.loan_id}:{month_key}"
-        month_start=datetime(dt.year,dt.month,1,tzinfo=timezone.utc)
-        month_end=datetime(dt.year+1,1,1,tzinfo=timezone.utc) if dt.month==12 else datetime(dt.year,dt.month+1,1,tzinfo=timezone.utc)
-        interest_rows=await db.transactions.find({"tenant_id":tenant_id,"loan_id":body.loan_id,"type":"loan_repayment","$or":[{"loan_interest_key":interest_key},{"payment_month":month_key},{"date":{"$gte":month_start,"$lt":month_end}}]},{"_id":1,"loan_interest_collected":1,"loan_interest_minor":1}).sort([("date",-1),("created_at",-1),("_id",-1)]).to_list(1000)
-        interest_already_minor=sum(int(x["loan_interest_minor"]) if x.get("loan_interest_minor") is not None else to_minor(x.get("loan_interest_collected",0) or 0) for x in interest_rows)
-        # A reversal must release the interest that its original payment collected.
-        original_interest_ids=[str(x["_id"]) for x in interest_rows]
-        if original_interest_ids:
-            reversed_interest_rows=await db.transactions.find({"tenant_id":tenant_id,"type":"reversal","original_type":"loan_repayment","reversal_of":{"$in":original_interest_ids}},{"loan_interest_minor":1,"loan_interest_collected":1}).to_list(1000)
-            interest_already_minor += sum(int(x["loan_interest_minor"]) if x.get("loan_interest_minor") is not None else to_minor(x.get("loan_interest_collected",0) or 0) for x in reversed_interest_rows)
-        last_month=str(loan.get("last_interest_accrual_month") or str(loan.get("start_date",dt))[:7]); current_month=month_key
+        # Accrue contractual simple interest cumulatively through the payment month,
+        # capped at the full-tenure contract amount. Do not treat each payment as
+        # a fresh month's interest, and never accrue beyond the saved loan tenure.
+        start_value=loan.get("start_date") or loan.get("created_at") or dt
+        if isinstance(start_value,datetime): start_date=start_value.date()
+        elif isinstance(start_value,date): start_date=start_value
+        elif isinstance(start_value,str):
+            try: start_date=date.fromisoformat(start_value[:10])
+            except Exception: start_date=dt.date()
+        else: start_date=dt.date()
         try:
-            ly,lm=map(int,last_month.split("-")); cy,cm=map(int,current_month.split("-")); elapsed_months=max(0,(cy-ly)*12+(cm-lm))
-        except Exception: elapsed_months=1
-        accrued_minor=int(loan["interest_accrued_minor"]) if loan.get("interest_accrued_minor") is not None else to_minor(loan.get("interest_accrued",loan.get("expected_interest",0)) or 0)
-        interest_paid_total_minor=int(loan["interest_paid_minor"]) if loan.get("interest_paid_minor") is not None else to_minor(loan.get("interest_paid",0) or 0)
-        if (elapsed_months==0 and not interest_rows and not loan.get("last_payment_date")
-                and accrued_minor<=0 and interest_paid_total_minor<=0):
-            # Preserve the first-payment accrual rule, but do not accrue the same
-            # month twice after a penalty-only or principal-only payment.
+            elapsed_months=max(1,(dt.year-start_date.year)*12+(dt.month-start_date.month)+1)
+        except Exception:
             elapsed_months=1
-        # This product's saved loan contract uses flat simple interest on the
-        # original disbursed principal; principal repayments must not silently
-        # reduce the agreed monthly interest amount.
-        new_interest_minor=max(0,simple_interest_minor(principal_minor,rate,elapsed_months)-interest_already_minor)
-        # Carry forward accrued-but-unpaid interest when the payment is partial.
-        accrued_before_minor=max(0,accrued_minor-interest_paid_total_minor)
-        interest_due_minor=accrued_before_minor+new_interest_minor
+        tenure=max(1,int(loan.get("months",1) or 1))
+        elapsed_months=min(tenure,elapsed_months)
+        expected_contractual_minor=(int(loan["expected_interest_minor"]) if loan.get("expected_interest_minor") is not None
+                                    else to_minor(loan.get("expected_interest",simple_interest_minor(principal_minor,rate,tenure)) or 0))
+        # Spread the stored tenure total across scheduled months using integer paise;
+        # the final month is capped to the exact contractual total.
+        accrued_to_date_minor=contractual_interest_accrued_minor(expected_contractual_minor,elapsed_months,tenure)
+        accrued_minor=int(loan["interest_accrued_minor"]) if loan.get("interest_accrued_minor") is not None else to_minor(loan.get("interest_accrued",0) or 0)
+        interest_paid_total_minor=int(loan["interest_paid_minor"]) if loan.get("interest_paid_minor") is not None else to_minor(loan.get("interest_paid",0) or 0)
+        new_interest_minor=max(0,accrued_to_date_minor-accrued_minor)
+        # Only accrued interest is currently collectible; future tenure interest is
+        # still shown as contractual pending interest in the portfolio UI.
+        interest_due_minor=max(0,accrued_to_date_minor-interest_paid_total_minor)
         overdue=_due_overdue_days(dt,due_day,dt.year,dt.month)
         # Fixed penalty per overdue day per missed monthly cycle; use the loan's
         # stored terms and subtract all net penalties already collected.
@@ -2814,9 +2815,9 @@ async def loan_payment(tenant_id:str,body:LoanPayment,user=Depends(admin_user)):
         tx_doc=await db.transactions.find_one({"_id":parse_oid(txid),"tenant_id":tenant_id})
         updated=await _apply_loan_repayment_once(tenant_id,tx_doc)
         remaining_principal_minor=max(0,(int(updated["principal_minor"]) if updated.get("principal_minor") is not None else to_minor(updated.get("principal",0) or 0))-(int(updated["principal_paid_minor"]) if updated.get("principal_paid_minor") is not None else to_minor(updated.get("principal_paid",0) or 0)))
-        accrued_interest_minor=int(updated["interest_accrued_minor"]) if updated.get("interest_accrued_minor") is not None else to_minor(updated.get("interest_accrued",updated.get("expected_interest",0)) or 0)
+        expected_interest_minor=int(updated["expected_interest_minor"]) if updated.get("expected_interest_minor") is not None else to_minor(updated.get("expected_interest",0) or 0)
         interest_paid_total_minor=int(updated["interest_paid_minor"]) if updated.get("interest_paid_minor") is not None else to_minor(updated.get("interest_paid",0) or 0)
-        remaining_interest_minor=max(0,accrued_interest_minor-interest_paid_total_minor)
+        remaining_interest_minor=max(0,expected_interest_minor-interest_paid_total_minor)
         return {"id":txid,"amount":payment,"principal":principal_paid,"interest":interest_paid,"penalty":penalty_paid,"loan_interest_part":interest_paid,"loan_principal_part":principal_paid,"loan_penalty_part":penalty_paid,"principal_remaining":float(from_minor(remaining_principal_minor)),"interest_remaining":float(from_minor(remaining_interest_minor))}
     finally:
         await release_operation_lock(lock_key)

@@ -150,3 +150,14 @@ class AccountingEngineTests(unittest.TestCase):
                                     amount_minor=10000, account='cash', extra={})
 
 if __name__ == '__main__': unittest.main()
+
+
+def test_contractual_loan_interest_accrues_cumulatively_and_caps_at_tenure():
+    from app.accounting_engine import contractual_interest_accrued_minor
+    # ₹50,000 at 2% monthly for 5 months = ₹5,000 contractual interest.
+    total = 500000
+    assert contractual_interest_accrued_minor(total, 1, 5) == 100000
+    assert contractual_interest_accrued_minor(total, 3, 5) == 300000
+    assert contractual_interest_accrued_minor(total, 5, 5) == total
+    assert contractual_interest_accrued_minor(total, 9, 5) == total
+    assert contractual_interest_accrued_minor(total, 0, 5) == 0

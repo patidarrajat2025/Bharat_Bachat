@@ -72,6 +72,9 @@ const hi: Record<string, string> = {
   "You can apply for an advance loan":"आप अग्रिम ऋण के लिए आवेदन कर सकते हैं","Approved Requests":"स्वीकृत अनुरोध",
   "Net Closing Balance":"अंतिम शेष बैलेंस","Total Credits":"कुल जमा","Total Debits":"कुल निकासी",
 };
+Object.assign(hi, {
+  "Principal Issued":"जारी मूलधन", "Vasool":"वसूल", "Closed":"बंद", "Overdue":"अतिदेय", "Loan Management":"ऋण प्रबंधन", "Create and disburse a member loan with clear repayment terms.":"स्पष्ट वापसी शर्तों के साथ सदस्य का ऋण बनाएँ और जारी करें।", "Issued":"जारी", "Loan Terms":"ऋण की शर्तें", "Loan Amount":"ऋण राशि", "Tenure in Months":"अवधि (महीनों में)", "Financial Summary":"वित्तीय सारांश", "Per month":"प्रति माह", "Principal + interest":"मूलधन + ब्याज", "Disbursement Details":"ऋण वितरण विवरण", "Account Source":"खाते का स्रोत"
+});
 const en: Record<string,string> = Object.fromEntries(Object.keys(hi).map(k=>[k,k]));
 
 const resources = { en:{translation:en}, hi:{translation:hi} };
@@ -414,3 +417,31 @@ Object.assign(en,{
 });
 i18n.addResourceBundle('hi','translation',hi,true,true);
 i18n.addResourceBundle('en','translation',en,true,true);
+
+
+Object.assign(hi, {
+  "Repay Loan / किस्त जमा करें":"ऋण चुकाएँ / किस्त जमा करें",
+  "Interest Recovery Progress":"ब्याज वसूली प्रगति",
+  "Total Contractual Interest":"कुल अनुबंधित ब्याज",
+  "Total Pending Interest":"कुल बाकी ब्याज",
+  "Total Repayment Amount":"कुल वापसी राशि",
+  "Estimated Auto Allocation":"अनुमानित स्वचालित विभाजन",
+  "Interest first (accrued due)":"पहले देय अर्जित ब्याज",
+  "Principal reduction (estimate)":"मूलधन में कमी (अनुमानित)",
+  "Final allocation is calculated and validated by the server against interest scheduled through the selected payment date and any applicable penalty.":"अंतिम विभाजन सर्वर चुनी गई भुगतान तारीख तक देय ब्याज और लागू जुर्माने के अनुसार गणना व सत्यापित करेगा।",
+  "Account Source":"राशि प्राप्त खाता",
+  "Principal Remaining":"बाकी मूलधन"
+});
+Object.assign(en, {
+  "Repay Loan / किस्त जमा करें":"Repay Loan / किस्त जमा करें",
+  "Interest Recovery Progress":"Interest Recovery Progress",
+  "Total Contractual Interest":"Total Contractual Interest",
+  "Total Pending Interest":"Total Pending Interest",
+  "Total Repayment Amount":"Total Repayment Amount",
+  "Estimated Auto Allocation":"Estimated Auto Allocation",
+  "Interest first (accrued due)":"Interest first (accrued due)",
+  "Principal reduction (estimate)":"Principal reduction (estimate)",
+  "Final allocation is calculated and validated by the server against interest scheduled through the selected payment date and any applicable penalty.":"Final allocation is calculated and validated by the server against interest scheduled through the selected payment date and any applicable penalty.",
+  "Account Source":"Account Source",
+  "Principal Remaining":"Principal Remaining"
+});

@@ -1,21 +1,19 @@
-# Test Report — 2026-10-18 follow-up fixes
+# Test Report — 2026-10-19 loan accounting/UI follow-up
 
 ## Passed
-- `python -m py_compile backend/app/api/group.py backend/app/accounting_engine.py`: PASS.
-- `python -m unittest tests.test_accounting_engine -v`: 21 tests passed, including the new assertion that the first day overdue is chargeable when the configured due date is already the cutoff.
-- `python -m unittest tests.test_journal -v`: PASS.
-- `python -m unittest tests.test_tenant_relation_validation -v`: PASS.
-- `frontend/src/App.tsx` TypeScript/JSX syntax transpilation: PASS (no syntax diagnostics).
-- ZIP integrity check: PASS.
+- `python -m compileall -q backend/app backend/tests`: PASS.
+- `PYTHONPATH=. pytest -q tests/test_accounting_engine.py tests/test_journal.py tests/test_tenant_relation_validation.py`: 37 passed, 6 subtests passed.
+- Frontend `App.tsx` and `i18n.ts` TypeScript transpile syntax checks: PASS (no syntax diagnostics).
+- ZIP integrity check: PASS after packaging.
 
 ## Blocked / not run
-- Full backend test discovery: the accounting authorization test module cannot import because `bson`/PyMongo is unavailable in this environment; other discovered tests passed.
-- Frontend production build/typecheck: dependencies could not be installed within the environment timeout, so a full `npm run build` is not verified.
-- MongoDB integration and live Render tests: not available here.
-- Existing historical Kist periods were not backfilled; the penalty fix applies when the normal Kist collection path runs after deployment.
+- Frontend production build/typecheck: not run; `npm ci --offline` failed because a dependency tarball was not cached. Full `npm run build` is not verified.
+- Accounting authorization test module and full backend test discovery: not run in this test invocation because the environment lacks `bson`/PyMongo.
+- MongoDB integration, concurrent repayment/reversal tests, and live Render tests: not available here.
 
 ## Production validation still required
-- Verify with an unused/pending member and payment date day 10 (no BC penalty), day 11 (one overdue day), and day 12 (two overdue days) using the group's configured `bc_per_day_penalty`.
-- Confirm one BC penalty transaction per member/period, balanced journal and financial-feed row, and no duplicate on an exact retry.
-- Verify dashboard Pending/Partial Save Payments uses selected date and account.
-- Verify Quick Action opens Create Loan and the large `This collection` value is fully visible on mobile.
+- Test first, partial, same-month repeated, next-month, late, and final-tenure repayments against a staging MongoDB.
+- Confirm expected interest = original principal × saved monthly rate × tenure; cumulative interest progress increments once per posted repayment and never exceeds 100%.
+- Confirm partial payments reduce contractual pending interest by only the interest component actually collected, and reduce principal only by the principal component.
+- Verify Cash and Bank repayment journals are balanced and use `cash`/`bank` as the debit asset, `loan_receivable` for principal recovery, and `loan_interest_income` for interest income.
+- Verify exact retries do not duplicate transactions, loan counters, journal entries, or financial-feed rows; verify reversal behavior before production rollout.
