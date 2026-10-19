@@ -2203,7 +2203,11 @@ async def accounting_view(tenant_id:str, view:str, period:str|None=None, account
                 "interest_progress":round(min(100,interest_paid/accrued_interest*100),1) if accrued_interest > 0 else 0,
             })
             out.append(x)
-        return {"view":view,"loans":out,"total_principal":round(sum(float(x.get("principal",0) or 0) for x in rows),2),"total_outstanding":round(sum(x["total_outstanding"] for x in out),2)}
+        collected_query={"tenant_id":tenant_id}
+        if user.get("role")=="member": collected_query["member_id"]=str(user.get("member_id") or "")
+        collected_rows=await db.loans.aggregate([{"$match":collected_query},{"$group":{"_id":None,"total":{"$sum":{"$convert":{"input":{"$ifNull":["$interest_paid",{"$ifNull":["$loan_interest_collected",0]}]},"to":"double","onError":0,"onNull":0}}}}}]).to_list(1)
+        total_interest_collected=round(float((collected_rows[0] if collected_rows else {}).get("total",0) or 0),2)
+        return {"view":view,"loans":out,"total_principal":round(sum(float(x.get("principal",0) or 0) for x in rows),2),"total_outstanding":round(sum(x["total_outstanding"] for x in out),2),"total_interest_collected":total_interest_collected}
 
     # Kist drill-down is intentionally member/share based and uses the exact
     # same current-month rules as the collection screen.
@@ -2566,13 +2570,15 @@ async def loans(tenant_id:str,member_id:str|None=None,user=Depends(current_user)
     totals=await db.loans.aggregate([{"$match":q},{"$group":{"_id":None,
         "principal":{"$sum":{"$convert":{"input":{"$ifNull":["$principal",0]},"to":"double","onError":0,"onNull":0}}},
         "outstanding":{"$sum":{"$subtract":[{"$convert":{"input":{"$ifNull":["$principal",0]},"to":"double","onError":0,"onNull":0}},{"$convert":{"input":{"$ifNull":["$principal_paid",0]},"to":"double","onError":0,"onNull":0}}]}},
-        "interest":{"$sum":{"$convert":{"input":{"$ifNull":["$expected_interest","$interest_accrued"]},"to":"double","onError":0,"onNull":0}}}
+        "interest":{"$sum":{"$convert":{"input":{"$ifNull":["$expected_interest","$interest_accrued"]},"to":"double","onError":0,"onNull":0}}},
+        "interest_collected":{"$sum":{"$convert":{"input":{"$ifNull":["$interest_paid",{"$ifNull":["$loan_interest_collected",0]}]},"to":"double","onError":0,"onNull":0}}}
     }}]).to_list(1)
     t=totals[0] if totals else {}
     return {"items":items,"page":page,"page_size":page_size,"total":total,"active_count":active_count,
             "total_principal":round(float(t.get("principal",0) or 0),2),
             "total_outstanding":round(float(t.get("outstanding",0) or 0),2),
             "total_interest":round(float(t.get("interest",0) or 0),2),
+            "total_interest_collected":round(float(t.get("interest_collected",0) or 0),2),
             "has_more":page*page_size<total}
 
 @router.get("/{tenant_id}/group-loans")

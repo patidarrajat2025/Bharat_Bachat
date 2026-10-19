@@ -445,3 +445,40 @@ Object.assign(en, {
   "Account Source":"Account Source",
   "Principal Remaining":"Principal Remaining"
 });
+
+
+// Loan management wording: keep progress labels and shortcuts language-consistent.
+Object.assign(hi, {
+  "Total Interest Collected":"कुल वसूल ब्याज",
+  "Collected across all loans":"सभी ऋणों से वसूल ब्याज",
+  "Collected across displayed loans":"दिखाए गए ऋणों से वसूल ब्याज",
+  "Repay Loan":"किस्त जमा करें",
+  "Recovered":"वसूल",
+  "Active portfolio":"सक्रिय ऋण पोर्टफोलियो",
+  "Group Loans":"समूह ऋण",
+  "Expected / accrued across loans":"सभी ऋणों का अपेक्षित ब्याज",
+  "Interest repayment":"ब्याज वसूली",
+  "Principal repayment":"मूलधन वसूली",
+  "Total Principal":"कुल मूलधन",
+  "Total Outstanding":"कुल बकाया",
+  "Principal Issued":"दिया गया मूलधन",
+  "Interest Rate":"ब्याज दर",
+  "Member Loan":"सदस्य ऋण"
+});
+Object.assign(en, {
+  "Total Interest Collected":"Total Interest Collected",
+  "Collected across all loans":"Collected across all loans",
+  "Collected across displayed loans":"Collected across displayed loans",
+  "Repay Loan":"Repay Loan",
+  "Recovered":"Recovered",
+  "Active portfolio":"Active portfolio",
+  "Group Loans":"Group Loans",
+  "Expected / accrued across loans":"Expected / accrued across loans",
+  "Interest repayment":"Interest repayment",
+  "Principal repayment":"Principal repayment",
+  "Total Principal":"Total Principal",
+  "Total Outstanding":"Total Outstanding",
+  "Principal Issued":"Principal Issued",
+  "Interest Rate":"Interest Rate",
+  "Member Loan":"Member Loan"
+});
