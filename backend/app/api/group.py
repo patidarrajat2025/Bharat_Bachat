@@ -12,7 +12,7 @@ from ..db import get_db, backfill_financial_feed
 from ..deps import current_user, tenant_guard, require_roles, parse_oid
 from ..models import *
 from ..services import tenant_summary, analytics
-from ..accounting_engine import monthly_overdue_penalty_minor, to_minor, from_minor, simple_interest_minor, contractual_interest_accrued_minor, allocate_kist_payment, profit_components, net_profit_from_buckets_minor, assert_idempotent_match, allocate_minor, financial_feed_source_key, bc_penalty_chargeable_days
+from ..accounting_engine import monthly_overdue_penalty_minor, to_minor, from_minor, simple_interest_minor, contractual_interest_accrued_minor, loan_settlement_is_complete, allocate_kist_payment, profit_components, net_profit_from_buckets_minor, assert_idempotent_match, allocate_minor, financial_feed_source_key, bc_penalty_chargeable_days
 from ..journal import build_journal, build_expense_journal, reverse_journal
 from ..audit import audit
 from ..core.config import settings
@@ -2667,8 +2667,17 @@ async def _apply_loan_repayment_once(tenant_id: str, tx: dict):
     interest_paid_minor=int(updated["interest_paid_minor"]) if updated.get("interest_paid_minor") is not None else to_minor(updated.get("interest_paid",0) or 0)
     interest_remaining_minor=max(0,accrued_interest_minor-interest_paid_minor)
     expected_interest_minor=int(updated["expected_interest_minor"]) if updated.get("expected_interest_minor") is not None else to_minor(updated.get("expected_interest",0) or 0)
-    if outstanding_minor<=0 and interest_paid_minor >= expected_interest_minor:
-        await db.loans.update_one({"_id":loan["_id"],"tenant_id":tenant_id},{"$set":{"status":"closed","closed_at":updated.get("closed_at") or datetime.now(timezone.utc)}})
+    # Early settlement rule: once principal and all interest accrued through the
+    # selected payment month are paid, close the loan and waive future-month
+    # contractual interest. Keep the original contract amount for audit history.
+    if loan_settlement_is_complete(outstanding_minor, accrued_interest_minor, interest_paid_minor):
+        close_fields={"status":"closed","closed_at":updated.get("closed_at") or datetime.now(timezone.utc),"early_settlement":bool(accrued_interest_minor < expected_interest_minor),"settled_interest_minor":accrued_interest_minor,"settled_interest":float(from_minor(accrued_interest_minor))}
+        if accrued_interest_minor < expected_interest_minor:
+            close_fields["original_contractual_interest_minor"]=expected_interest_minor
+            close_fields["original_contractual_interest"]=float(from_minor(expected_interest_minor))
+            close_fields["expected_interest_minor"]=accrued_interest_minor
+            close_fields["expected_interest"]=float(from_minor(accrued_interest_minor))
+        await db.loans.update_one({"_id":loan["_id"],"tenant_id":tenant_id},{"$set":close_fields})
     await db.transactions.update_one({"_id":tx["_id"],"tenant_id":tenant_id},{"$set":{"loan_apply_status":"applied","loan_applied_at":datetime.now(timezone.utc)}})
     return await db.loans.find_one({"_id":loan["_id"],"tenant_id":tenant_id})
 

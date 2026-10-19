@@ -231,3 +231,12 @@ def monthly_overdue_penalty_minor(start_date: date, payment_date: date, due_day:
         if payment_date > due:
             total_days += (payment_date - due).days
     return max(0, int(rate_minor_per_day)) * total_days
+
+def loan_settlement_is_complete(outstanding_principal_minor: int, accrued_interest_minor: int, interest_paid_minor: int) -> bool:
+    """A loan is settled when principal and interest accrued through settlement are paid.
+
+    Future-tenure interest is not payable after an early full settlement.
+    All inputs are integer paise.
+    """
+    return max(0, int(outstanding_principal_minor)) == 0 and max(0, int(interest_paid_minor)) >= max(0, int(accrued_interest_minor))
+

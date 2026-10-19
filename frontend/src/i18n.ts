@@ -430,7 +430,10 @@ Object.assign(hi, {
   "Principal reduction (estimate)":"मूलधन में कमी (अनुमानित)",
   "Final allocation is calculated and validated by the server against interest scheduled through the selected payment date and any applicable penalty.":"अंतिम विभाजन सर्वर चुनी गई भुगतान तारीख तक देय ब्याज और लागू जुर्माने के अनुसार गणना व सत्यापित करेगा।",
   "Account Source":"राशि प्राप्त खाता",
-  "Principal Remaining":"बाकी मूलधन"
+  "Principal Remaining":"बाकी मूलधन",
+  "Interest Payable This Month":"इस महीने देय ब्याज",
+  "Interest payable through this month":"इस महीने तक देय ब्याज",
+  "Early settlement waives future-month interest. Pay principal plus interest through this month and any applicable overdue penalty; the server validates the final split.":"समय से पहले पूरा ऋण चुकाने पर आगे के महीनों का ब्याज नहीं लगेगा। मूलधन, इस महीने तक का ब्याज और लागू बकाया जुर्माना जमा करें; अंतिम विभाजन सर्वर सत्यापित करेगा।"
 });
 Object.assign(en, {
   "Repay Loan / किस्त जमा करें":"Repay Loan / किस्त जमा करें",
@@ -443,7 +446,10 @@ Object.assign(en, {
   "Principal reduction (estimate)":"Principal reduction (estimate)",
   "Final allocation is calculated and validated by the server against interest scheduled through the selected payment date and any applicable penalty.":"Final allocation is calculated and validated by the server against interest scheduled through the selected payment date and any applicable penalty.",
   "Account Source":"Account Source",
-  "Principal Remaining":"Principal Remaining"
+  "Principal Remaining":"Principal Remaining",
+  "Interest Payable This Month":"Interest Payable This Month",
+  "Interest payable through this month":"Interest payable through this month",
+  "Early settlement waives future-month interest. Pay principal plus interest through this month and any applicable overdue penalty; the server validates the final split.":"Early settlement waives future-month interest. Pay principal plus interest through this month and any applicable overdue penalty; the server validates the final split."
 });
 
 

@@ -161,3 +161,18 @@ def test_contractual_loan_interest_accrues_cumulatively_and_caps_at_tenure():
     assert contractual_interest_accrued_minor(total, 5, 5) == total
     assert contractual_interest_accrued_minor(total, 9, 5) == total
     assert contractual_interest_accrued_minor(total, 0, 5) == 0
+
+
+def test_early_full_settlement_waives_future_month_interest():
+    from app.accounting_engine import loan_settlement_is_complete
+    expected_full_tenure_interest = 500000  # ₹5,000 for 10 months
+    current_month_interest = 50000  # ₹500 accrued through settlement month
+    principal_outstanding = 1000000  # ₹10,000 principal in paise
+    # Paying the principal and current-month interest closes early; future interest is waived.
+    assert loan_settlement_is_complete(0, current_month_interest, current_month_interest)
+    # Full principal with an unpaid portion of accrued interest must not close.
+    assert not loan_settlement_is_complete(0, current_month_interest, current_month_interest - 1)
+    # A loan with any principal left remains open even when interest is fully paid.
+    assert not loan_settlement_is_complete(1, current_month_interest, current_month_interest)
+    # Full-tenure settlement still closes when all contractual interest has been paid.
+    assert loan_settlement_is_complete(0, expected_full_tenure_interest, expected_full_tenure_interest)
