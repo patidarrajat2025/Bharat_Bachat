@@ -7,7 +7,7 @@ import "./styles.css";
 import App from "./App";
 
 registerSW({ immediate: true });
-document.documentElement.lang = localStorage.getItem("bb-lang") || "en-IN";
+document.documentElement.lang = localStorage.getItem("bb-settings-lang") === "hi" ? "hi-IN" : "en-IN";
 
 function ScrollToTop(){
   const location=useLocation();

@@ -136,6 +136,7 @@ export const api={
  adminStatus:(id:string,active:boolean)=>request<any>(`/super-admin/users/${id}/status`,{method:'PATCH',body:JSON.stringify({active})}),
  resetUserPassword:(id:string,password:string)=>request<any>(`/super-admin/users/${id}/reset-password`,{method:'POST',body:JSON.stringify({password})}),
  dashboard:(id:string)=>request<any>(`/group/${id}/dashboard`),
+ supportContacts:(id:string)=>request<any[]>(`/group/${id}/support-contacts`),
  accounting:(id:string,view:string,params="")=>request<any>(`/group/${id}/accounting/${view}${params}`),
  adminOverview:(id:string)=>request<any>(`/group/${id}/admin-overview`),
  summary:(id:string,memberId?:string)=>request<any>(`/group/${id}/summary${memberId?`?member_id=${encodeURIComponent(memberId)}`:''}`),

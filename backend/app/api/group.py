@@ -1893,11 +1893,13 @@ async def accounting_reconciliation(tenant_id: str, user=Depends(admin_user)):
 
 
 def _assert_accounting_view_access(role: str | None, view: str) -> None:
-    """Authorize accounting drill-downs; members only receive personal profit summary."""
+    """Authorize read-only group financial transparency views.
+
+    All authenticated tenant members may read group accounting views; mutations
+    remain on separate admin-only POST/PATCH/DELETE endpoints.
+    """
     if role not in ("member", "group_admin", "super_admin"):
         raise HTTPException(403, "Accounting access denied")
-    if role == "member" and view != "profit":
-        raise HTTPException(403, "Members cannot access group-wide accounting records")
 
 
 @router.get("/{tenant_id}/accounting/{view}")
@@ -1911,8 +1913,8 @@ async def accounting_view(tenant_id:str, view:str, period:str|None=None, account
     """
     await tenant_guard(user, tenant_id)
     allowed={"profit","expenses","outflows","closing","interest","active-loans","kist","register"}
-    # This endpoint's non-profit views contain group-wide raw rows. A tenant
-    # guard alone does not authorize an individual member to see those records.
+    # These GET views are read-only. Group members are explicitly allowed to
+    # inspect the tenant's financial records for cooperative transparency.
     _assert_accounting_view_access(user.get("role"), view)
     if view not in allowed:
         raise HTTPException(404, "Accounting view not found")
@@ -2581,10 +2583,22 @@ async def loans(tenant_id:str,member_id:str|None=None,user=Depends(current_user)
             "total_interest_collected":round(float(t.get("interest_collected",0) or 0),2),
             "has_more":page*page_size<total}
 
+@router.get("/{tenant_id}/support-contacts")
+async def support_contacts(tenant_id: str, user=Depends(current_user)):
+    """Expose only active group-admin contact details for member support; read-only."""
+    await tenant_guard(user, tenant_id)
+    db = get_db()
+    rows = await db.users.find(
+        {"tenant_id": parse_oid(tenant_id), "role": {"$in": ["group_admin", "admin"]}, "active": {"$ne": False}},
+        {"_id": 1, "first_name": 1, "last_name": 1, "name": 1, "phone": 1}
+    ).sort([("first_name", 1), ("name", 1)]).to_list(100)
+    return [{"id": str(row.get("_id")), "name": (row.get("name") or f"{row.get('first_name', '')} {row.get('last_name', '')}").strip(), "phone": row.get("phone", "")} for row in rows]
+
+
 @router.get("/{tenant_id}/group-loans")
-async def group_loans(tenant_id:str,user=Depends(admin_user)):
+async def group_loans(tenant_id:str,user=Depends(current_user)):
     await tenant_guard(user,tenant_id); db=get_db()
-    rows=await db.loans.find({"tenant_id":tenant_id,"status":"active"}).sort("created_at",-1).to_list(5000)
+    rows=await db.loans.find({"tenant_id":tenant_id}).sort("created_at",-1).to_list(5000)
     member_ids=[]
     for r in rows:
         try: member_ids.append(parse_oid(str(r.get("member_id"))))

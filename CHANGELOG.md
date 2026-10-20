@@ -40,3 +40,10 @@ No frontend source or API response schema was intentionally changed. No financia
 - Refined Active Loans Management metrics with an amber Total Outstanding card, clean borders/shadows, larger expandable touch targets, status pills, and rupee-based repayment progress labels.
 - Reorganized Create Loan form into Loan Terms and Disbursement Details groups, upgraded the credit eligibility/financial summary panel, and increased account/date input tap targets.
 - Added Hindi localization for the new loan UI strings; existing loan calculation and API posting logic was intentionally preserved.
+
+
+## 2026-10-20 — i18n, transparency and member access
+- Removed synthetic Hindi `अन्य` fallback and filled missing static UI translations.
+- English is default; Hindi preference is stored only by Settings language control.
+- Added read-only member access to Group Loans and group accounting drill-downs, plus member dashboard shortcuts and admin call/WhatsApp directory.
+- Added tenant-scoped support contacts endpoint; admin-only write APIs remain protected.

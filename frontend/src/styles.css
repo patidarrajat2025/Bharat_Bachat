@@ -3397,3 +3397,15 @@ button,.btn-primary,.btn-secondary,.input,textarea,select{font-size:15px}
 .loan-summary-details{display:flex;flex-wrap:wrap;gap:8px 18px;margin-top:12px;font-size:11px;color:#5e7166}.loan-summary-details b{color:#1a2b4c}
 .loan-submit-button{min-height:50px;font-weight:900;box-shadow:0 5px 14px rgba(15,157,88,.2)}
 @media(max-width:640px){.loan-form-input-grid{grid-template-columns:1fr;gap:8px}.loan-disbursement-grid{grid-template-columns:1fr 1fr}.loan-create-cta{align-items:flex-start;padding:16px;gap:10px}.loan-create-cta h2{font-size:17px}.loan-create-cta p{font-size:11px}.loan-create-cta-button{min-height:44px;padding:0 12px!important}.loan-summary-hero-grid{gap:7px}.loan-summary-hero-grid>div{padding:11px}.loan-summary-hero-grid strong{font-size:clamp(16px,4.5vw,21px)}.loan-summary-heading>strong{font-size:18px}.loan-history-amounts b{font-size:14px}}
+
+
+/* Member transparency shortcuts: read-only navigation, no transaction controls. */
+.member-transparency-actions{margin-top:1rem;padding:1rem;border:1px solid var(--bb-line,#e2e8f0);border-radius:1.25rem;background:rgba(255,255,255,.88);box-shadow:0 8px 24px rgba(15,23,42,.045)}
+.member-transparency-actions h2{font-weight:850;color:var(--bb-navy,#1a2b4c);font-size:1rem}
+.member-transparency-actions>p{font-size:.78rem;color:#64748b;margin-top:.2rem}
+.member-shortcut-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:.7rem;margin-top:.85rem}
+.member-shortcut-grid button{min-height:88px;display:flex;flex-direction:column;align-items:flex-start;justify-content:center;gap:.4rem;padding:.85rem;border:1px solid #dce8e1;border-radius:1rem;background:linear-gradient(145deg,#fff,#f4fbf6);color:#164e3b;text-align:left;font-weight:800}
+.member-shortcut-grid button svg{color:#0f9d58}
+.member-shortcut-grid button span{font-size:.86rem;line-height:1.25}
+.member-shortcut-grid button small{font-size:.68rem;line-height:1.25;color:#64748b;font-weight:600}
+@media(min-width:640px){.member-shortcut-grid{grid-template-columns:repeat(4,minmax(0,1fr))}}

@@ -81,17 +81,12 @@ const resources = { en:{translation:en}, hi:{translation:hi} };
 
 i18n.use(initReactI18next).init({
   resources,
-  lng: localStorage.getItem("bb-lang") || "en",
+  lng: localStorage.getItem("bb-settings-lang") === "hi" ? "hi" : "en",
   fallbackLng: "en",
   interpolation: { escapeValue:false },
 });
 export const currentLanguage = () => i18n.language === 'hi' ? 'hi' : 'en';
-const hiFallback=(value:string)=>{
-  let text=String(value??'');
-  const words:Record<string,string>={active:'सक्रिय',inactive:'निष्क्रिय',pending:'लंबित',partial:'आंशिक',paid:'जमा',approved:'स्वीकृत',rejected:'अस्वीकृत',closed:'बंद',loan:'ऋण',loans:'ऋण',member:'सदस्य',members:'सदस्य',share:'शेयर',shares:'शेयर',interest:'ब्याज',penalty:'जुर्माना',expense:'खर्च',expenses:'खर्च',profit:'लाभ',principal:'मूलधन',payment:'भुगतान',payments:'भुगतान',repayment:'वापसी',repayments:'वापसी',amount:'राशि',balance:'शेष',account:'खाता',cash:'नकद',bank:'बैंक',date:'तारीख',time:'समय',status:'स्थिति',type:'प्रकार',note:'नोट',reason:'कारण',total:'कुल',opening:'शुरुआती',closing:'अंतिम',credit:'जमा',credits:'जमा',debit:'निकासी',debits:'निकासी',inflow:'आवक',inflows:'आवक',outflow:'जावक',outflows:'जावक',active_account:'सक्रिय खाता',dashboard:'डैशबोर्ड',history:'इतिहास',settings:'सेटिंग',save:'सहेजें',select:'चुनें',open:'खोलें',view:'देखें',create:'बनाएँ',new:'नया',edit:'संपादित करें',delete:'हटाएँ',group:'समूह',admin:'एडमिन',admins:'एडमिन',super:'सुपर',system:'सिस्टम',record:'रिकॉर्ड',records:'रिकॉर्ड',request:'अनुरोध',requests:'अनुरोध',due:'देय',remaining:'बाकी',days:'दिन',months:'महीने',month:'महीना',year:'वर्ष',years:'वर्ष',today:'आज',tomorrow:'कल',available:'उपलब्ध',expected:'अपेक्षित',phone:'फोन',email:'ईमेल',name:'नाम',description:'विवरण',category:'श्रेणी',purpose:'उद्देश्य'};
-  text=text.replace(/\b[A-Za-z][A-Za-z_/-]*\b/g,m=>words[m.toLowerCase()]||'अन्य');
-  return text;
-};
+const hiFallback=(value:string)=>String(value??'');
 export const tr = (key:string) => i18n.language==='hi' ? (hi[key] ?? hiFallback(key)) : i18n.t(key, { defaultValue:key });
 export const trError = (message:string) => {
   const map:Record<string,string> = {
@@ -280,6 +275,99 @@ Object.assign(en, {
 Object.assign(hi,{"Entry Type":"प्रविष्टि प्रकार","View Universal Ledger":"सार्वभौमिक लेजर देखें","Reconciliation Snapshot":"मिलान सारांश","Open Reconciliation":"मिलान खोलें","Restricted system audit trail for Super Admin only":"केवल सुपर एडमिन के लिए प्रतिबंधित सिस्टम ऑडिट ट्रेल","Select a group to view restricted audit records.":"प्रतिबंधित ऑडिट रिकॉर्ड देखने के लिए समूह चुनें।","Opening Balance + Credits − Debits = Closing Balance":"खाता मिलान: शुरुआती बैलेंस + जमा − निकासी = अंतिम बैलेंस","Active balance reserve":"सक्रिय बैलेंस रिज़र्व","Loan":"ऋण","Admin Control":"एडमिन नियंत्रण","Post Kist, manage payments, loans, expenses and group settings":"किस्त, भुगतान, ऋण, खर्च और समूह सेटिंग प्रबंधित करें"});
 Object.assign(en,{"Entry Type":"Entry Type","View Universal Ledger":"View Universal Ledger","Reconciliation Snapshot":"Reconciliation Snapshot","Open Reconciliation":"Open Reconciliation","Restricted system audit trail for Super Admin only":"Restricted system audit trail for Super Admin only","Select a group to view restricted audit records.":"Select a group to view restricted audit records.","Opening Balance + Credits − Debits = Closing Balance":"Opening Balance + Credits − Debits = Closing Balance","Active balance reserve":"Active balance reserve","Loan":"Loan","Admin Control":"Admin Control","Post Kist, manage payments, loans, expenses and group settings":"Post Kist, manage payments, loans, expenses and group settings"});
 
+
+Object.assign(hi, {
+  "A simple guide to how Bharat Bachat calculates each account value.":"भारत बचत में प्रत्येक खाते की राशि कैसे निकाली जाती है, इसकी सरल जानकारी।",
+  "A single audited ledger with card-specific inflow and outflow drill-downs.":"कार्ड के अनुसार आवक और जावक देखने वाला एकीकृत ऑडिट लेजर।",
+  "Accounting Formulas":"लेखा गणना सूत्र",
+  "Allocated group expenses":"समूह खर्च का आवंटित हिस्सा",
+  "Allocated group profit":"समूह लाभ का आवंटित हिस्सा",
+  "Application No":"आवेदन क्रमांक",
+  "Application submitted successfully":"आवेदन सफलतापूर्वक जमा हुआ",
+  "Approval is only available after reviewing document status. Missing files should be requested before approval.":"दस्तावेज़ों की स्थिति जाँचने के बाद ही मंज़ूरी दें। कोई दस्तावेज़ बाकी हो तो पहले मँगाएँ।",
+  "Approve & Disburse":"मंज़ूरी दें और ऋण जारी करें",
+  "BC Kist Penalty":"बीसी किस्त जुर्माना",
+  "BC Regular Kist":"नियमित बीसी किस्त",
+  "Back":"वापस",
+  "Back to Payments":"भुगतान पर वापस जाएँ",
+  "Bank Book":"बैंक बही",
+  "Close Review":"जाँच बंद करें",
+  "Collect selected member/share amounts in one flow":"चुने हुए सदस्यों/शेयरों की राशि एक साथ वसूलें",
+  "Continue":"आगे बढ़ें",
+  "Credits":"जमा राशि",
+  "Debits":"निकासी राशि",
+  "Describe missing documents or corrections for the member":"सदस्य के लिए बाकी दस्तावेज़ या सुधार लिखें",
+  "Document verification":"दस्तावेज़ जाँच",
+  "Documents":"दस्तावेज़",
+  "Enter amount":"राशि दर्ज करें",
+  "Estimated monthly EMI":"अनुमानित मासिक किस्त",
+  "Fill All Remaining":"बाकी सभी राशि भरें",
+  "Group financial drill-down is available to administrators only":"समूह के वित्तीय विवरण केवल देखने हेतु उपलब्ध हैं",
+  "Income Proof":"आय प्रमाण",
+  "Interest rate":"ब्याज दर",
+  "Load Members":"सदस्य लोड करें",
+  "Load next 10 members":"अगले 10 सदस्य लोड करें",
+  "Loading more members…":"और सदस्य लोड हो रहे हैं…",
+  "Loading more…":"और रिकॉर्ड लोड हो रहे हैं…",
+  "Loan Details":"ऋण विवरण",
+  "Loan EMI Penalty":"ऋण किस्त जुर्माना",
+  "Loan Repayment":"ऋण वापसी",
+  "Missing":"बाकी",
+  "My Loans & Applications":"मेरे ऋण और आवेदन",
+  "Not provided":"नहीं दिया गया",
+  "Not uploaded":"अपलोड नहीं किया गया",
+  "Open additional income entry":"अन्य आय की प्रविष्टि खोलें",
+  "Open expense entry form directly":"खर्च दर्ज करने का फ़ॉर्म खोलें",
+  "Open matching entries":"संबंधित प्रविष्टियाँ खोलें",
+  "Open member list":"सदस्य सूची खोलें",
+  "Open repayment engine":"ऋण वापसी दर्ज करें",
+  "Optional for now":"अभी वैकल्पिक",
+  "Other Interest / Penalty":"अन्य ब्याज / जुर्माना",
+  "Penalty Category":"जुर्माने की श्रेणी",
+  "Remaining":"बाकी राशि",
+  "Request additional documents / changes":"अतिरिक्त दस्तावेज़ / सुधार माँगें",
+  "Requested amount":"माँगी गई राशि",
+  "Review & Submit":"जाँचें और जमा करें",
+  "Review Application":"आवेदन जाँचें",
+  "Review Loan Application":"ऋण आवेदन की जाँच",
+  "Review your application":"अपने आवेदन की जाँच करें",
+  "Save All Kist / Bulk Kist":"सभी किस्तें एक साथ जमा करें",
+  "Scroll for more":"और देखने के लिए नीचे जाएँ",
+  "Single Member Kist":"एक सदस्य की किस्त",
+  "Submit Application":"आवेदन जमा करें",
+  "Tenure":"ऋण अवधि",
+  "Total BC Kist":"कुल बीसी किस्त",
+  "Total BC Kist + Total Interests + Total Penalties; expenses shown separately":"कुल बीसी किस्त + कुल ब्याज + कुल जुर्माना; खर्च अलग दिखाए जाते हैं",
+  "Total Inflows":"कुल आवक",
+  "Total Outflows":"कुल जावक",
+  "Total Profit = All Interest + All Penalties. Expenses are reported separately and do not reduce profit.":"कुल लाभ = सभी ब्याज + सभी जुर्माने। खर्च अलग दिखते हैं और लाभ में से नहीं घटाए जाते।",
+  "Total expenses":"कुल खर्च",
+  "Total interest and penalties":"कुल ब्याज और जुर्माना",
+  "Universal ledger with clickable financial drill-downs":"वित्तीय विवरण खोलने की सुविधा वाला एकीकृत लेजर",
+  "Uploading…":"अपलोड हो रहा है…",
+  "applications":"आवेदन",
+  "loans":"ऋण",
+  "members fully paid":"सदस्यों का पूरा भुगतान",
+  "month":"महीना",
+  "months":"महीने",
+  "selected":"चुना गया",
+  "transactions":"लेन-देन",
+  "Choose app language":"ऐप की भाषा चुनें",
+  "Formulas":"गणना सूत्र",
+  "Loading more":"और रिकॉर्ड लोड हो रहे हैं",
+  "Apply for Loan":"ऋण के लिए आवेदन",
+  "My Passbook":"मेरी पासबुक",
+  "Sanchalak Directory":"संचालक संपर्क सूची",
+  "Call Admin":"एडमिन को कॉल करें",
+  "WhatsApp Admin":"एडमिन को WhatsApp करें",
+  "No support contacts are available yet.":"अभी संचालक संपर्क उपलब्ध नहीं हैं।",
+  "Group financial dashboard is read-only for members.":"सदस्यों के लिए समूह का वित्तीय डैशबोर्ड केवल देखने हेतु है।",
+  "Total Interest Collected":"कुल वसूल ब्याज",
+  "Post Installment":"किस्त जमा करें",
+  "Total Interest":"कुल ब्याज",
+  "Recovered":"वसूल",
+  "Repay Loan":"ऋण की किस्त जमा करें",
+});
 export const appLocale=()=>i18n.language==='hi'?'hi-IN':'en-IN';
 export const trDynamic=(value:string)=>{
   const text=String(value??'');
@@ -470,6 +558,38 @@ Object.assign(hi, {
   "Principal Issued":"दिया गया मूलधन",
   "Interest Rate":"ब्याज दर",
   "Member Loan":"सदस्य ऋण"
+});
+
+Object.assign(hi, {
+  "PDF Download & WhatsApp Share":"PDF डाउनलोड और WhatsApp पर साझा करें",
+  "Call Admin / WhatsApp Admin":"संचालक को कॉल करें / WhatsApp करें",
+  "Group Admin":"समूह संचालक",
+  "Member Loans":"सदस्यों के ऋण",
+  "Principal repayment":"मूलधन वसूली",
+  "Interest repayment":"ब्याज वसूली",
+  "Interest Collected":"वसूल ब्याज",
+  "Interest Due":"बाकी ब्याज",
+  "Total Interest Collected":"कुल वसूल ब्याज",
+  "Interest Recovery Progress":"ब्याज वसूली प्रगति",
+  "Collected":"वसूल राशि",
+  "Recovered":"वसूल",
+  "Total Contractual Interest":"कुल अनुबंधित ब्याज",
+  "Interest Payable This Month":"इस महीने देय ब्याज",
+  "Total Repayment Amount":"कुल वापसी राशि",
+  "Estimated Auto Allocation":"अनुमानित स्वचालित बँटवारा",
+  "Interest payable through this month":"इस महीने तक देय ब्याज",
+  "Principal reduction (estimate)":"मूलधन में कमी (अनुमानित)",
+  "Early settlement waives future-month interest. Pay principal plus interest through this month and any applicable overdue penalty; the server validates the final split.":"समय से पहले पूरा भुगतान करने पर आगे के महीनों का ब्याज नहीं लगेगा। मूलधन, इस महीने तक का ब्याज और लागू विलंब जुर्माना जमा करें; अंतिम हिसाब सिस्टम जाँचेगा।",
+  "Post Installment":"किस्त जमा करें",
+  "Loan Repayment":"ऋण वापसी",
+  "Total Interest":"कुल ब्याज",
+  "Group financial dashboard is read-only for members.":"सदस्यों के लिए समूह का वित्तीय डैशबोर्ड केवल देखने हेतु है।",
+  "Apply for Loan":"ऋण के लिए आवेदन",
+  "My Passbook":"मेरी पासबुक",
+  "Sanchalak Directory":"संचालक संपर्क सूची",
+  "Call Admin":"संचालक को कॉल करें",
+  "WhatsApp Admin":"संचालक को WhatsApp करें",
+  "No support contacts are available yet.":"अभी संचालक संपर्क उपलब्ध नहीं हैं।",
 });
 Object.assign(en, {
   "Total Interest Collected":"Total Interest Collected",

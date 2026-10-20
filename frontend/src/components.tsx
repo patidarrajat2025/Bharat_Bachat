@@ -14,7 +14,7 @@ export function LanguageToggle(){
   const {i18n,t}=useTranslation();
   const next=i18n.language==='en'?'hi':'en';
   return <button type="button" className="language-toggle" aria-label={t('language')}
-    onClick={()=>{i18n.changeLanguage(next);localStorage.setItem('bb-lang',next);document.documentElement.lang=next}}>
+    onClick={()=>{i18n.changeLanguage(next);localStorage.setItem('bb-settings-lang',next);document.documentElement.lang=next}}>
     <span className="language-code">{i18n.language==='en'?'EN':'HI'}</span>
   </button>;
 }
@@ -42,7 +42,7 @@ const nav=[
 
 export function ThemeSettings({onDone}:{onDone?:()=>void}={}){
   const {i18n}=useTranslation(); const {tenant}=useStore();
-  const setLanguage=()=>{const n=i18n.language==='en'?'hi':'en';i18n.changeLanguage(n);localStorage.setItem('bb-lang',n);document.documentElement.lang=n};
+  const setLanguage=()=>{const n=i18n.language==='en'?'hi':'en';i18n.changeLanguage(n);localStorage.setItem('bb-settings-lang',n);document.documentElement.lang=n};
   return <div className="settings-panel">
     <div className="settings-row"><div><b>{tr('Language')}</b><span>{tr('Choose app language')}</span></div><button className="setting-pill" onClick={setLanguage}><span className="language-code">{i18n.language==='en'?'EN':'HI'}</span></button></div>
     <div className="settings-row settings-theme-row"><div><b>{tr('Theme')}</b><span>{tenant?.name||tr('Group')} {tr('visual system')}</span></div><div className="theme-choice active figma-theme-lock"><span className="theme-swatch" style={{background:'linear-gradient(135deg,#047857,#065F46)'}}/><span>{tenant?.name||tr('Group')}</span><Check size={14}/></div></div>
@@ -92,7 +92,7 @@ export function Layout({children}:{children:ReactNode}){
   const refreshNotifications=async(openTray=false)=>{if(!user?.tenant_id)return;try{const rows=await api.notifications(user.tenant_id);const unreadRows=rows.filter((n:any)=>!n.read);setUnread(unreadRows.length);setNotifications(rows);if(openTray&&unreadRows.length){await Promise.all(unreadRows.map((n:any)=>api.markNotificationRead(user.tenant_id!,n._id).catch(()=>null)));setNotifications(rows.map((n:any)=>({...n,read:true})));setUnread(0)}}catch{}};
   const closeNotifications=async()=>{setNotifOpen(false);if(!user?.tenant_id||!notifications.length)return;const ids=notifications.map((n:any)=>n._id).filter(Boolean);try{await api.clearNotifications(user.tenant_id,ids);setNotifications([]);setUnread(0)}catch{}};
   const allowed=user?.role==='member'
-    ? ['/dashboard','/analytics','/passbook','/personal-loan']
+    ? ['/dashboard','/analytics','/passbook','/personal-loan','/loans']
     : user?.role==='super_admin'
       ? ['/admin']
       : nav.map(x=>x[0]);
@@ -128,7 +128,6 @@ export function Layout({children}:{children:ReactNode}){
         
         <div className="header-actions">
           <InstallButton/>
-          <LanguageToggle/>
           <button type="button" className="header-icon-btn" aria-label={tr('Notifications')} onClick={async()=>{await refreshNotifications(true);setNotifOpen(true)}}><Bell size={19}/>{unread>0&&<span>{unread>9?'9+':unread}</span>}</button>
           <div className="profile-wrap" ref={profileRef}>
             <button type="button" className="profile-trigger" onClick={()=>setProfile(v=>!v)} aria-expanded={profile}>
