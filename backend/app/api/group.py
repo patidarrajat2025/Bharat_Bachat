@@ -1229,8 +1229,12 @@ async def monthly_kist_status(tenant_id:str,member_id:str,period:str,user=Depend
     return {"member_id":member_id,"period":period,"kist_per_share":expected,"shares":out,"expected_total":float(from_minor(expected_total_minor)),"paid_total":float(from_minor(paid_total_minor)),"remaining_total":float(from_minor(remaining_total_minor))}
 
 @router.get("/{tenant_id}/monthly-kist-bulk-status")
-async def monthly_kist_bulk_status(tenant_id: str, period: str, page: int = 1, page_size: int = 10, search: str = "", user=Depends(admin_user)):
-    await tenant_guard(user, tenant_id); db=get_db()
+async def monthly_kist_bulk_status(tenant_id: str, period: str, page: int = 1, page_size: int = 10, search: str = "", user=Depends(current_user)):
+    # Read-only group-wide status is visible to authenticated tenant members; collection stays admin-only.
+    await tenant_guard(user, tenant_id)
+    if user.get("role") not in ("member", "group_admin", "admin", "super_admin"):
+        raise HTTPException(403, "Kist status access denied")
+    db=get_db()
     tenant=await db.tenants.find_one({"_id":parse_oid(tenant_id)})
     if not tenant: raise HTTPException(404,"Group not found")
     import re
@@ -1253,7 +1257,7 @@ async def monthly_kist_bulk_status(tenant_id: str, period: str, page: int = 1, p
     for sh in shares: shares_by_member.setdefault(str(sh["member_id"]),[]).append(sh)
     for member in members:
         mid=str(member["_id"]); expected_count=max(1,int(member.get("shares",1) or 1))
-        if len(shares_by_member.get(mid,[]))<expected_count: shares_by_member[mid]=await ensure_member_shares(member)
+        if len(shares_by_member.get(mid,[]))<expected_count and user.get("role")!="member": shares_by_member[mid]=await ensure_member_shares(member)
     tx_rows=await db.transactions.aggregate([
         {"$match":{"tenant_id":tenant_id,"$and":[{"$or":[{"type":"contribution"},{"type":"reversal","original_type":"contribution"}]},{"$or":[{"payment_category":"monthly_kist"},{"payment_category":None},{"payment_category":{"$exists":False}}]},{"$or":[{"period":period},{"$and":[{"period":None},{"date":{"$gte":start,"$lt":end}}]}]}]}},
         {"$group":{"_id":{"member_id":"$member_id","share_id":"$share_id","share_no":"$share_no"},"paid_minor":{"$sum":_mongo_amount_minor_expr()}}}
@@ -2163,8 +2167,12 @@ async def accounting_view(tenant_id:str, view:str, period:str|None=None, account
             return {"view": view, "filter": category, "entries": entries, "has_more": offset + len(entries) < total, "total_entries": total, "grand_total": round(float(summary.get("total", 0) or 0), 2)}
 
     if view=="active-loans":
-        loan_query={"tenant_id":tenant_id,"status":"active"}
-        if user.get("role")=="member": loan_query["member_id"]=str(user.get("member_id") or "")
+        loan_query={"tenant_id":tenant_id}
+        if user.get("role")=="member":
+            # Members can inspect their own active and closed loan history, but cannot mutate repayments here.
+            loan_query["member_id"]=str(user.get("member_id") or "")
+        else:
+            loan_query["status"]="active"
         rows=await db.loans.find(loan_query).sort("created_at",-1).to_list(5000)
         mids=[parse_oid(str(x.get("member_id"))) for x in rows if parse_oid(str(x.get("member_id")))]
         members={str(m["_id"]):m for m in await db.members.find({"tenant_id":tenant_id,"_id":{"$in":mids}}).to_list(len(mids) or 1)}

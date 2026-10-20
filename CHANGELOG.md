@@ -47,3 +47,9 @@ No frontend source or API response schema was intentionally changed. No financia
 - English is default; Hindi preference is stored only by Settings language control.
 - Added read-only member access to Group Loans and group accounting drill-downs, plus member dashboard shortcuts and admin call/WhatsApp directory.
 - Added tenant-scoped support contacts endpoint; admin-only write APIs remain protected.
+
+## 2026-10-20 — Member Kist transparency, role guide, and loan history
+- Member dashboard Kist status cards now use group-wide member/share totals and open read-only group status lists.
+- Member Kist status reads do not expose payment/receipt actions and do not create missing shares on the member read path.
+- Added role-aware App User Guide to the More menu with Hindi guide translations.
+- Member Active Loans drill-down now includes own closed-loan history and does not show repayment controls.

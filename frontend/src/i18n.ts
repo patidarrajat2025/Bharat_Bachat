@@ -608,3 +608,51 @@ Object.assign(en, {
   "Interest Rate":"Interest Rate",
   "Member Loan":"Member Loan"
 });
+
+Object.assign(hi, {
+  "App User Guide":"ऐप उपयोगकर्ता मार्गदर्शिका",
+  "A practical guide to what you can do in Bharat Bachat based on your role.":"आपकी भूमिका के अनुसार भारत बचत में उपलब्ध सुविधाओं का सरल मार्गदर्शन।",
+  "Welcome to Bharat Bachat":"भारत बचत में आपका स्वागत है",
+  "Your role":"आपकी भूमिका",
+  "This guide explains the main screens and which actions are available to you.":"यह मार्गदर्शिका मुख्य स्क्रीन और आपकी भूमिका में उपलब्ध कार्यों को समझाती है।",
+  "Dashboard and group overview":"डैशबोर्ड और समूह विवरण",
+  "Members and BC Kist":"सदस्य और बीसी किस्त",
+  "Loans":"ऋण",
+  "Other operations and controls":"अन्य कार्य और नियंत्रण",
+  "Your account and passbook":"आपका खाता और पासबुक",
+  "Help and safe use":"सहायता और सुरक्षित उपयोग",
+  "Need help?":"मदद चाहिए?",
+  "Members should contact their group admin. Admins should verify financial records and group settings before changing any saved entry.":"सदस्य अपने समूह एडमिन से संपर्क करें। किसी भी सहेजी गई प्रविष्टि को बदलने से पहले एडमिन वित्तीय रिकॉर्ड और समूह सेटिंग जाँचें।",
+  "Read-only view: payment entry and receipt actions are available only to admins.":"केवल देखने की सुविधा: भुगतान दर्ज करना और रसीद की कार्रवाई केवल एडमिन कर सकते हैं।",
+  "Read-only history of your active and closed loans, repayments and outstanding balances.":"आपके चालू और बंद ऋण, भुगतान और बकाया राशि का केवल-पठन इतिहास।",
+  "No loan history":"ऋण इतिहास उपलब्ध नहीं है",
+  "Group Total":"समूह कुल",
+  "My Share":"मेरा हिस्सा",
+  "Tap a status to view member-wise share reconciliation.":"सदस्य-वार शेयर विवरण देखने के लिए स्थिति चुनें।",
+  "Group financial dashboard is read-only for members.":"सदस्यों के लिए समूह का वित्तीय डैशबोर्ड केवल देखने हेतु है।"
+});
+Object.assign(hi, {
+  "Use Group Total / My Share to switch between group-wide figures and your own share.":"समूह के आँकड़ों और अपने हिस्से के बीच बदलने के लिए ‘समूह कुल / मेरा हिस्सा’ चुनें।",
+  "Open Collected, Pending or Partial under Monthly Kist Status to inspect member-wise share details.":"मासिक किस्त स्थिति में ‘जमा’, ‘बाकी’ या ‘आंशिक’ चुनकर सदस्य-वार शेयर विवरण देखें।",
+  "Use Financial Register, Profit, Expenses, Outflows and Active Loans drill-downs to review the supporting records.":"संबंधित रिकॉर्ड देखने के लिए वित्तीय रजिस्टर, लाभ, खर्च, निकासी और सक्रिय ऋण के विवरण खोलें।",
+  "Open Members to review member profiles, shares and membership details.":"सदस्यों की प्रोफ़ाइल, शेयर और सदस्यता विवरण देखने के लिए ‘सदस्य’ खोलें।",
+  "Use Admin → Payments to collect monthly BC Kist, select Cash or Bank, set the payment date and save.":"मासिक बीसी किस्त लेने के लिए एडमिन → भुगतान खोलें, नकद या बैंक चुनें, भुगतान की तारीख भरें और सहेजें।",
+  "Use Bulk Kist for multiple members; check each share amount before saving.":"कई सदस्यों की किस्त एक साथ दर्ज करने के लिए बल्क किस्त इस्तेमाल करें और सहेजने से पहले हर शेयर की राशि जाँचें।",
+  "Collected receipts can be downloaded/shared from the admin status drill-down.":"जमा स्थिति के एडमिन विवरण से रसीद डाउनलोड या साझा की जा सकती है।",
+  "Review member loan requests in Admin → Loans and approve/reject them according to group policy.":"एडमिन → ऋण में सदस्य के आवेदन देखें और समूह नीति के अनुसार मंज़ूर या अस्वीकार करें।",
+  "Use Group Loans to inspect loans and repayment history.":"ऋण और भुगतान इतिहास देखने के लिए ‘समूह ऋण’ खोलें।",
+  "Record repayments only through the repayment action so the ledger and balances update together.":"भुगतान केवल ऋण वापसी कार्रवाई से दर्ज करें ताकि लेजर और बैलेंस एक साथ अपडेट हों।",
+  "Configure loan and Kist policy from More → Loan & Kist Settings.":"अधिक → ऋण और किस्त सेटिंग में ऋण और किस्त की नीति निर्धारित करें।",
+  "Use Admin → Expenses to record group expenses with category, account, date and optional proof.":"समूह खर्च दर्ज करने के लिए एडमिन → खर्च खोलें और श्रेणी, खाता, तारीख तथा चाहें तो प्रमाण जोड़ें।",
+  "Use Other Interest / Penalty only for applicable entries; avoid entering a fee already posted automatically.":"अन्य ब्याज / जुर्माना केवल लागू प्रविष्टियों के लिए इस्तेमाल करें; सिस्टम द्वारा पहले से दर्ज शुल्क दोबारा न डालें।",
+  "Use the Sanchalak Directory and support contacts to help members.":"सदस्यों की सहायता के लिए संचालक संपर्क सूची का उपयोग करें।",
+  "Keep member credentials private and verify account/date/amount before saving any financial transaction.":"सदस्यों की लॉगिन जानकारी गोपनीय रखें और वित्तीय लेन-देन सहेजने से पहले खाता, तारीख और राशि जाँचें।",
+  "In Monthly Kist Status, tap Collected, Pending or Partial to see the status of all active group members and expand a member to inspect share-wise amounts.":"मासिक किस्त स्थिति में जमा, बाकी या आंशिक चुनकर सभी सक्रिय सदस्यों की स्थिति देखें। किसी सदस्य को खोलकर शेयर-वार राशि देखें।",
+  "These group status lists are read-only for members. You cannot collect payments or download/share other members’ receipts.":"समूह की ये स्थिति सूचियाँ सदस्यों के लिए केवल देखने हेतु हैं। आप भुगतान जमा नहीं कर सकते और न ही अन्य सदस्यों की रसीद डाउनलोड/साझा कर सकते हैं।",
+  "Open My Passbook to review your own transactions and available passbook export/share options.":"अपने लेन-देन और उपलब्ध पासबुक डाउनलोड/साझा विकल्प देखने के लिए ‘मेरी पासबुक’ खोलें।",
+  "Open My Loan / Apply for Loan to submit a request and follow its status.":"ऋण आवेदन देने और उसकी स्थिति देखने के लिए ‘मेरा ऋण / ऋण के लिए आवेदन’ खोलें।",
+  "Open Group Loans to inspect the group loan history. Member access is read-only; repayment buttons are not available.":"समूह ऋण इतिहास देखने के लिए ‘समूह ऋण’ खोलें। सदस्य केवल इतिहास देख सकते हैं; भुगतान बटन उपलब्ध नहीं है।",
+  "Use Sanchalak Directory from the Dashboard to call or WhatsApp your group admin, when contact details are available.":"संपर्क विवरण उपलब्ध होने पर डैशबोर्ड की संचालक संपर्क सूची से समूह एडमिन को कॉल या WhatsApp करें।",
+  "Contact your group admin if a Kist status, loan balance or payment entry looks incorrect.":"किस्त की स्थिति, ऋण बैलेंस या भुगतान प्रविष्टि गलत लगे तो समूह एडमिन से संपर्क करें।",
+  "Never share your PIN/password. Check the date and amount on any receipt before relying on it.":"अपना पिन/पासवर्ड कभी साझा न करें। किसी रसीद पर भरोसा करने से पहले तारीख और राशि जाँचें।"
+});
