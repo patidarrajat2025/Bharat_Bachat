@@ -7,7 +7,7 @@ from .db import connect_db, close_db, get_db, backfill_financial_feed
 from .services import backfill_legacy_expense_allocations
 from .core.config import settings
 from .core.security import hash_password
-from .api import auth, super_admin, group, reports
+from .api.v1.router import api_router
 
 logger = logging.getLogger(__name__)
 
@@ -174,7 +174,4 @@ app.add_middleware(
 async def health():
     return {"status": "ok", "service": "bharat-bachat-api"}
 
-app.include_router(auth.router, prefix="/api")
-app.include_router(super_admin.router, prefix="/api")
-app.include_router(group.router, prefix="/api")
-app.include_router(reports.router, prefix="/api")
+app.include_router(api_router, prefix="/api")
