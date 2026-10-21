@@ -150,6 +150,7 @@ class LoanRequestDecision(BaseModel):
 class MonthlyKistAllocation(BaseModel):
     share_id: str = Field(min_length=1)
     amount: float = Field(gt=0)
+    payment_status: Literal["partially_paid", "fully_paid"] | None = None
 
 
 class MonthlyKistCreate(BaseModel):

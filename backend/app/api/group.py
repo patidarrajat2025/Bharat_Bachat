@@ -1448,6 +1448,22 @@ async def monthly_kist_bulk(tenant_id: str, body: BulkMonthlyKistCreate, user=De
             existing_by_idem = {str(row.get("idempotency_key")): row for row in existing_rows}
         idempotency_lookup_wall_s = perf_counter() - idempotency_lookup_wall_started
 
+        # Validate all explicitly status-tagged allocations before any posting begins.
+        for entry in entries:
+            for allocation in entry.allocations:
+                if allocation.payment_status is None:
+                    continue
+                retry_key = f"{body.idempotency_key}:{allocation.share_id}" if body.idempotency_key else None
+                if retry_key and retry_key in existing_by_idem:
+                    continue
+                share = selected_shares[allocation.share_id][1]
+                remaining_minor = max(0, expected_minor - max(0, int(already_minor_by_share.get(allocation.share_id, 0))))
+                entered_minor = to_minor(allocation.amount)
+                if allocation.payment_status == "fully_paid" and entered_minor != remaining_minor:
+                    raise HTTPException(400, f"Share {share['share_no']}: full payment must equal the outstanding amount ₹{float(from_minor(remaining_minor)):.2f}.")
+                if allocation.payment_status == "partially_paid" and entered_minor >= remaining_minor:
+                    raise HTTPException(400, f"Share {share['share_no']}: partial payment must be less than the outstanding amount ₹{float(from_minor(remaining_minor)):.2f}.")
+
         # Shares are individually locked above. Post independent allocations concurrently
         # with bounded fan-out. Keep this cap configurable for different MongoDB plans.
         post_concurrency = max(8, min(32, int(os.getenv("MONTHLY_KIST_POST_CONCURRENCY", "24"))))
@@ -1479,11 +1495,19 @@ async def monthly_kist_bulk(tenant_id: str, body: BulkMonthlyKistCreate, user=De
                                 "status": existing_tx.get("status", "posted")}, paid_amount_minor, entry.member_id, False
 
                 already_minor = int(already_minor_by_share.get(allocation.share_id, 0))
+                entered_minor = to_minor(allocation.amount)
+                remaining_minor = max(0, expected_minor - max(0, already_minor))
+                if allocation.payment_status == "fully_paid" and entered_minor != remaining_minor:
+                    raise HTTPException(400, f"Share {share['share_no']}: full payment must equal the outstanding amount ₹{float(from_minor(remaining_minor)):.2f}.")
+                if allocation.payment_status == "partially_paid" and entered_minor >= remaining_minor:
+                    raise HTTPException(400, f"Share {share['share_no']}: partial payment must be less than the outstanding amount ₹{float(from_minor(remaining_minor)):.2f}.")
                 try:
                     allocation_result = allocate_kist_payment(
-                        expected_minor, already_minor, to_minor(allocation.amount), cap_to_remaining=True
+                        expected_minor, already_minor, entered_minor, cap_to_remaining=True
                     )
-                except ValueError:
+                except ValueError as exc:
+                    if allocation.payment_status is not None:
+                        raise HTTPException(400, f"Share {share['share_no']} payment amount is invalid for the selected status.") from exc
                     return None
 
                 post_minor = allocation_result["posted_minor"]
@@ -1682,6 +1706,29 @@ async def monthly_kist(tenant_id:str,body:MonthlyKistCreate,user=Depends(admin_u
     shares=await ensure_member_shares(member); share_map={str(x["_id"]):x for x in shares}
     if len({a.share_id for a in body.allocations})!=len(body.allocations): raise HTTPException(400,"Duplicate share selected")
     dt=datetime.combine(body.date or date.today(),datetime.min.time(),tzinfo=timezone.utc)
+    # Preflight every status-bearing allocation before the first financial write.
+    # This prevents a later mismatch from leaving earlier shares posted.
+    preflight_period_start = datetime(period_year, period_month, 1, tzinfo=timezone.utc)
+    preflight_period_end = (datetime(period_year + 1, 1, 1, tzinfo=timezone.utc) if period_month == 12 else datetime(period_year, period_month + 1, 1, tzinfo=timezone.utc))
+    preflight_expected_minor = to_minor(tenant.get("kist_per_share", 500))
+    for allocation in body.allocations:
+        if allocation.payment_status is None:
+            continue
+        if body.idempotency_key:
+            prior = await db.transactions.find_one({"tenant_id": tenant_id, "idempotency_key": f"{body.idempotency_key}:{allocation.share_id}"}, {"_id": 1})
+            if prior:
+                continue
+        share = share_map.get(allocation.share_id)
+        if not share:
+            raise HTTPException(400, "One or more selected shares are not active for this member")
+        paid_rows = await db.transactions.find({"tenant_id":tenant_id,"member_id":body.member_id,"$and":[{"$or":[{"type":"contribution"},{"type":"reversal","original_type":"contribution"}]},{"$or":[{"share_id":allocation.share_id},{"share_no":int(share["share_no"]),"share_id":{"$exists":False}}]},{"$or":[{"payment_category":"monthly_kist"},{"payment_category":None},{"payment_category":{"$exists":False}}]},{"$or":[{"period":body.period},{"$and":[{"period":None},{"date":{"$gte":preflight_period_start,"$lt":preflight_period_end}}]}]}]}).to_list(500)
+        paid_minor = sum(_doc_amount_minor(row) for row in paid_rows)
+        remaining_minor = max(0, preflight_expected_minor - max(0, paid_minor))
+        entered_minor = to_minor(allocation.amount)
+        if allocation.payment_status == "fully_paid" and entered_minor != remaining_minor:
+            raise HTTPException(400, f"Share {share['share_no']}: full payment must equal the outstanding amount ₹{float(from_minor(remaining_minor)):.2f}.")
+        if allocation.payment_status == "partially_paid" and entered_minor >= remaining_minor:
+            raise HTTPException(400, f"Share {share['share_no']}: partial payment must be less than the outstanding amount ₹{float(from_minor(remaining_minor)):.2f}.")
     results=[]; total_minor=0
     for allocation in body.allocations:
         lock_key=f"kist-payment:{tenant_id}:{body.period}:{allocation.share_id}"
@@ -1703,9 +1750,15 @@ async def monthly_kist(tenant_id:str,body:MonthlyKistCreate,user=Depends(admin_u
             paid_cursor=await db.transactions.find({"tenant_id":tenant_id,"member_id":body.member_id,"$and":[{"$or":[{"type":"contribution"},{"type":"reversal","original_type":"contribution"}]},{"$or":[{"share_id":allocation.share_id},{"share_no":int(share["share_no"]),"share_id":{"$exists":False}}]},{"$or":[{"payment_category":"monthly_kist"},{"payment_category":None},{"payment_category":{"$exists":False}}]},{"$or":[{"period":body.period},{"$and":[{"period":None},{"date":{"$gte":start,"$lt":end}}]}]}] }).sort([("date",-1),("created_at",-1),("_id",-1)]).to_list(500)
             already_paid_minor=sum(_doc_amount_minor(x) for x in paid_cursor)
             allocation_minor=to_minor(allocation.amount)
+            remaining_minor=max(0,expected_minor-max(0,already_paid_minor))
+            # Validate the selected payment status against the authoritative balance
+            # before writing any contribution for this allocation.
+            if allocation.payment_status == "fully_paid" and allocation_minor != remaining_minor:
+                raise HTTPException(400, f"Share {share['share_no']}: full payment must equal the outstanding amount ₹{float(from_minor(remaining_minor)):.2f}.")
+            if allocation.payment_status == "partially_paid" and allocation_minor >= remaining_minor:
+                raise HTTPException(400, f"Share {share['share_no']}: partial payment must be less than the outstanding amount ₹{float(from_minor(remaining_minor)):.2f}.")
             try: allocation_result=allocate_kist_payment(expected_minor,already_paid_minor,allocation_minor)
             except ValueError as exc:
-                remaining_minor=max(0,expected_minor-max(0,already_paid_minor))
                 if remaining_minor<=0: raise HTTPException(409,f"Share {share['share_no']} is already fully paid for {body.period}") from exc
                 raise HTTPException(400,f"Share {share['share_no']} can accept at most {float(from_minor(remaining_minor)):.2f} for {body.period}") from exc
             after_minor=allocation_result["cumulative_minor"]; status=allocation_result["status"]
