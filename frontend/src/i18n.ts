@@ -656,3 +656,9 @@ Object.assign(hi, {
   "Contact your group admin if a Kist status, loan balance or payment entry looks incorrect.":"किस्त की स्थिति, ऋण बैलेंस या भुगतान प्रविष्टि गलत लगे तो समूह एडमिन से संपर्क करें।",
   "Never share your PIN/password. Check the date and amount on any receipt before relying on it.":"अपना पिन/पासवर्ड कभी साझा न करें। किसी रसीद पर भरोसा करने से पहले तारीख और राशि जाँचें।"
 });
+
+
+Object.assign(hi, {
+  "Principal reduction (estimate, before penalty)":"मूलधन में अनुमानित कमी (जुर्माने से पहले)",
+  "Repayment allocation order: applicable overdue penalty, accrued interest, then principal. The estimate above excludes any penalty; the server calculates and validates the exact split.":"भुगतान का क्रम: लागू विलंब जुर्माना, अर्जित ब्याज, फिर मूलधन। ऊपर का अनुमान जुर्माना शामिल नहीं करता; सर्वर सही विभाजन की गणना और पुष्टि करता है।"
+});
