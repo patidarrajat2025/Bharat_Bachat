@@ -3525,3 +3525,15 @@ button,.btn-primary,.btn-secondary,.input,textarea,select{font-size:15px}
 .loan-repayment-summary .grid>div span{display:block;font-size:10px;line-height:1.2;color:#64748b}
 .loan-repayment-summary .grid>div>div{margin-top:3px;font-size:12px;line-height:1.2;white-space:nowrap;font-variant-numeric:tabular-nums;overflow:visible}
 @media(max-width:480px){.loan-repayment-summary .grid{grid-template-columns:repeat(2,minmax(0,1fr))!important}.loan-repayment-summary .grid>div>div{font-size:12px}}
+
+/* Final compact loan UI polish: selected quick chips, maturity label and safe footer spacing */
+.loan-quick-chip{display:flex;align-items:center;justify-content:center;width:100%;padding:9px 10px;border:1px solid #d7e2da;border-radius:11px;background:#fff;color:#334155;font-size:13px;font-weight:800;transition:background .15s,border-color .15s,box-shadow .15s}
+.loan-quick-chip:hover{border-color:#7abf98}
+.loan-quick-chip.is-selected{background:#e8f5e9;border-color:#0f9d58;color:#087443;box-shadow:inset 0 0 0 1px rgba(15,157,88,.12)}
+.loan-borrower-card .loan-days-remaining{white-space:normal;text-align:right;line-height:1.3;max-width:58%;font-size:10px}
+.loan-borrower-card .loan-slim-progress>div:first-child>span:first-child{flex:1;min-width:0}
+.loan-borrower-card .loan-repay-cta{margin-bottom:16px!important}
+.loan-allocation-banner>div span{white-space:nowrap;flex-shrink:0}
+.loan-allocation-banner>div b{flex-shrink:0;white-space:nowrap;overflow-wrap:normal;word-break:keep-all}
+.loan-allocation-banner .loan-allocation-total{font-weight:900;border-top:1px solid #b8e2c8;padding-top:8px;margin-top:6px}
+@media(max-width:480px){.loan-borrower-card .loan-days-remaining{max-width:52%;font-size:9px}.loan-quick-chip{font-size:12px;padding:8px 5px}.loan-allocation-banner>div{gap:6px!important}.loan-allocation-banner>div span{font-size:11px;white-space:normal;flex:1 1 auto}.loan-allocation-banner>div b{font-size:11px;flex:0 0 auto}}
