@@ -3672,3 +3672,12 @@ select.input,.passbook-filter-grid select{min-height:44px}
 .loan-borrower-card .loan-dues-alert{background:#fffbeb!important;border:1px solid #f59e0b!important;border-radius:12px!important;padding:10px!important}
 .loan-borrower-card .loan-dues-alert span{color:#92400e!important}
 .loan-borrower-card .loan-dues-alert b{color:#78350f!important}
+
+/* Dashboard hierarchy: deposits stay visible outside the expandable breakdown. */
+.dashboard-deposit-pair-outside{display:grid!important;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;margin-top:10px}
+.dashboard-deposit-pair-outside .dashboard-deposit-mini{min-width:0}
+.dashboard-quick-actions-after-kist{margin-top:12px!important}
+/* Keep the profile identity legible on the white popover surface. */
+.profile-menu-head b{color:#172b25!important;font-weight:900!important;font-size:14px!important;line-height:1.35!important}
+.profile-menu-head span{color:#52665e!important}
+@media(max-width:380px){.dashboard-deposit-pair-outside{gap:7px}.dashboard-deposit-pair-outside .dashboard-deposit-mini{padding:10px!important}.dashboard-deposit-pair-outside .dashboard-deposit-mini strong{font-size:15px!important}}
