@@ -2887,14 +2887,47 @@ async def loan_payment(tenant_id:str,body:LoanPayment,user=Depends(admin_user)):
             try: start_date=date.fromisoformat(start_value[:10])
             except Exception: start_date=dt.date()
         else: start_date=dt.date()
-        accrued_penalty_minor=monthly_overdue_penalty_minor(start_date,dt.date(),due_day,to_minor(per_day_penalty))
-        all_penalty_rows=await db.transactions.find({"tenant_id":tenant_id,"loan_id":body.loan_id,"$or":[{"type":"loan_repayment"},{"type":"reversal","original_type":"loan_repayment"}]},{"loan_penalty_collected":1,"loan_penalty_minor":1}).to_list(10000)
-        penalty_already_minor=sum(int(x["loan_penalty_minor"]) if x.get("loan_penalty_minor") is not None else to_minor(x.get("loan_penalty_collected",0) or 0) for x in all_penalty_rows)
+        # Calculate each overdue cycle using the already-configured per-day penalty.
+        # A fully paid month's scheduled principal+interest has no penalty for that cycle;
+        # >=50% paid gets half the configured rate, and <50% gets the full configured rate.
+        import calendar
+        repayment_rows=await db.transactions.find(
+            {"tenant_id":tenant_id,"loan_id":body.loan_id,"type":"loan_repayment"},
+            {"payment_month":1,"date":1,"principal_repaid":1,"principal_repaid_minor":1,
+             "loan_interest_collected":1,"loan_interest_minor":1,"loan_penalty_collected":1,"loan_penalty_minor":1}
+        ).to_list(10000)
+        paid_by_month={}
+        penalty_already_minor=0
+        for row in repayment_rows:
+            month=str(row.get("payment_month") or (row.get("date").strftime("%Y-%m") if hasattr(row.get("date"),"strftime") else str(row.get("date") or "")[:7]))
+            principal_part=int(row["principal_repaid_minor"]) if row.get("principal_repaid_minor") is not None else to_minor(row.get("principal_repaid",0) or 0)
+            interest_part=int(row["loan_interest_minor"]) if row.get("loan_interest_minor") is not None else to_minor(row.get("loan_interest_collected",0) or 0)
+            paid_by_month[month]=paid_by_month.get(month,0)+principal_part+interest_part
+            penalty_already_minor += int(row["loan_penalty_minor"]) if row.get("loan_penalty_minor") is not None else to_minor(row.get("loan_penalty_collected",0) or 0)
+        monthly_principal_minor=(principal_minor+tenure-1)//tenure
+        monthly_interest_minor=(expected_contractual_minor+tenure-1)//tenure
+        scheduled_monthly_minor=monthly_principal_minor+monthly_interest_minor
+        accrued_penalty_minor=0
+        cycle_year,cycle_month=start_date.year,start_date.month
+        while True:
+            cycle_month+=1
+            if cycle_month>12: cycle_year+=1; cycle_month=1
+            if (cycle_year,cycle_month)>(dt.year,dt.month): break
+            cycle_key=f"{cycle_year:04d}-{cycle_month:02d}"
+            due_dom=min(max(1,due_day),calendar.monthrange(cycle_year,cycle_month)[1])
+            cycle_due=date(cycle_year,cycle_month,due_dom)
+            if dt.date()<=cycle_due: continue
+            paid_cycle=paid_by_month.get(cycle_key,0)
+            if scheduled_monthly_minor<=0 or paid_cycle>=scheduled_monthly_minor: continue
+            rate_minor=to_minor(per_day_penalty)
+            if paid_cycle*2>=scheduled_monthly_minor: rate_minor=(rate_minor+1)//2
+            accrued_penalty_minor += max(0,(dt.date()-cycle_due).days)*max(0,rate_minor)
         penalty_due_minor=max(0,accrued_penalty_minor-penalty_already_minor)
         payment_minor=to_minor(body.amount) if body.amount is not None else to_minor(body.principal)+to_minor(body.interest)
         if payment_minor<=0: raise HTTPException(400,"Payment must be greater than zero")
-        penalty_paid_minor=min(payment_minor,penalty_due_minor); remaining_minor=payment_minor-penalty_paid_minor
-        interest_paid_minor=min(remaining_minor,interest_due_minor); remaining_minor-=interest_paid_minor
+        # Allocation policy: interest first, then overdue penalty, then principal.
+        interest_paid_minor=min(payment_minor,interest_due_minor); remaining_minor=payment_minor-interest_paid_minor
+        penalty_paid_minor=min(remaining_minor,penalty_due_minor); remaining_minor-=penalty_paid_minor
         principal_paid_minor=min(remaining_minor,outstanding_principal_minor); remaining_minor-=principal_paid_minor
         if remaining_minor>0:
             raise HTTPException(400,"Payment exceeds current principal, interest and penalty due")

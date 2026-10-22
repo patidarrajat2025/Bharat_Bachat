@@ -3430,3 +3430,12 @@ button,.btn-primary,.btn-secondary,.input,textarea,select{font-size:15px}
 .loan-penalty-tile span{color:#ffcb73!important}
 .loan-penalty-tile b{color:#ffcb73!important}
 @media(max-width:760px){.loan-preview-summary{grid-template-columns:repeat(3,minmax(0,1fr))!important;gap:7px!important}.loan-preview-summary>div{padding:11px 9px!important;border-radius:13px!important}.loan-preview-summary>div span{font-size:9px!important}.loan-preview-summary>div strong,.loan-preview-summary>div b{font-size:clamp(12px,3.4vw,17px)!important}.loan-borrower-grid{grid-template-columns:1fr!important}.loan-borrower-card{padding:14px!important}.loan-borrower-card .loan-finance-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important}}
+
+/* Loan portfolio cards use the same light surfaces as the rest of Bharat Bachat. */
+.loan-borrower-card{background:#fff!important;border:1px solid var(--figma-line,#e2e8f0)!important;border-radius:20px!important;color:var(--figma-navy,#1a2b4c)!important;box-shadow:0 7px 22px rgba(15,23,42,.045)!important;padding:17px!important}
+.loan-borrower-card .loan-finance-grid>div{background:#f8fafc!important;border:1px solid #e2e8f0!important;border-radius:12px!important;padding:11px!important}
+.loan-borrower-card .loan-finance-grid span{font-size:10px!important;color:#64748b!important}
+.loan-borrower-card .loan-finance-grid b{font-size:15px!important;color:#1a2b4c!important;overflow-wrap:anywhere}
+.loan-borrower-card .loan-progress-human,.loan-borrower-card .loan-borrower-meta{color:#64748b!important}
+.loan-borrower-card .loan-progress-track{background:#e2e8f0!important}
+.loan-borrower-card .loan-progress-track>span{background:#10b981!important}
