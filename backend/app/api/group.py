@@ -2220,12 +2220,11 @@ async def accounting_view(tenant_id:str, view:str, period:str|None=None, account
             return {"view": view, "filter": category, "entries": entries, "has_more": offset + len(entries) < total, "total_entries": total, "grand_total": round(float(summary.get("total", 0) or 0), 2)}
 
     if view=="active-loans":
-        loan_query={"tenant_id":tenant_id}
-        if user.get("role")=="member":
-            # Members can inspect their own active and closed loan history, but cannot mutate repayments here.
-            loan_query["member_id"]=str(user.get("member_id") or "")
-        else:
-            loan_query["status"]="active"
+        # Active Loans is a group-level read-only dashboard for both admins and
+        # members. Keep the same tenant-scoped active-loan dataset for both roles;
+        # member accounts are still prevented from posting repayments in the UI
+        # and all mutation endpoints remain role-protected.
+        loan_query={"tenant_id":tenant_id,"status":"active"}
         rows=await db.loans.find(loan_query).sort("created_at",-1).to_list(5000)
         mids=[parse_oid(str(x.get("member_id"))) for x in rows if parse_oid(str(x.get("member_id")))]
         members={str(m["_id"]):m for m in await db.members.find({"tenant_id":tenant_id,"_id":{"$in":mids}}).to_list(len(mids) or 1)}
@@ -2266,8 +2265,7 @@ async def accounting_view(tenant_id:str, view:str, period:str|None=None, account
                 "interest_progress":round(min(100,interest_paid/accrued_interest*100),1) if accrued_interest > 0 else 0,
             })
             out.append(x)
-        collected_query={"tenant_id":tenant_id}
-        if user.get("role")=="member": collected_query["member_id"]=str(user.get("member_id") or "")
+        collected_query={"tenant_id":tenant_id,"status":"active"}
         collected_rows=await db.loans.aggregate([{"$match":collected_query},{"$group":{"_id":None,"total":{"$sum":{"$convert":{"input":{"$ifNull":["$interest_paid",{"$ifNull":["$loan_interest_collected",0]}]},"to":"double","onError":0,"onNull":0}}}}}]).to_list(1)
         total_interest_collected=round(float((collected_rows[0] if collected_rows else {}).get("total",0) or 0),2)
         return {"view":view,"loans":out,"total_principal":round(sum(float(x.get("principal",0) or 0) for x in rows),2),"total_outstanding":round(sum(x["total_outstanding"] for x in out),2),"total_interest_collected":total_interest_collected}
