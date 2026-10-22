@@ -3629,3 +3629,46 @@ button,.btn-primary,.btn-secondary,.input,textarea,select{font-size:15px}
 .app-shell[data-route="/loans"] .loan-top-metrics span{font-size:clamp(8px,1.8vw,11px)!important;line-height:1.2!important;overflow-wrap:anywhere}
 .app-shell[data-route="/loans"] .loan-top-metrics strong{font-size:clamp(12px,3.2vw,22px)!important;line-height:1.15!important;white-space:normal!important;overflow-wrap:anywhere}
 @media(max-width:360px){.app-shell[data-route="/loans"] .loan-top-metrics{gap:5px!important}.app-shell[data-route="/loans"] .loan-top-metrics>div{padding:9px 6px!important}.app-shell[data-route="/loans"] .loan-top-metrics span{font-size:8px!important}}
+
+/* Production polish pass: compact page endings, accessible controls and consistent empty states. */
+.app-main{padding-bottom:16px!important}
+.page-content{padding-bottom:4px!important}
+.app-shell[data-route="/dashboard"] .page-content{padding-bottom:0!important}
+.app-shell[data-route="/dashboard"] .activity-list:last-child,
+.app-shell[data-route="/dashboard"] .dashboard-activity:last-child{margin-bottom:0!important}
+
+/* Profile menu should size to its content rather than inheriting modal/viewport height. */
+.profile-menu,
+.profile-layer .profile-menu,
+.profile-dismiss-layer .profile-menu{
+  height:auto!important;min-height:0!important;max-height:min(80vh,560px)!important;
+  overflow-y:auto!important;align-content:start!important;gap:12px!important;
+  padding:12px!important;box-sizing:border-box!important;
+}
+.profile-menu-head{padding:8px 8px 12px!important;margin:0!important;flex:none!important}
+.profile-menu button{min-height:44px!important;margin-top:0!important;padding:11px 10px!important;flex:none!important}
+.profile-menu>*{flex-shrink:0}
+
+/* Loan overview metrics remain a balanced three-card row. */
+.loan-preview-summary{display:grid!important;grid-template-columns:repeat(3,minmax(0,1fr))!important;gap:10px!important}
+.loan-preview-summary>div{min-width:0!important}
+.loan-preview-summary b,.loan-preview-summary strong{overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
+@media(max-width:420px){.loan-preview-summary{gap:6px!important}.loan-preview-summary>div{padding:9px 7px!important}.loan-preview-summary>div span{font-size:8px!important;line-height:1.25!important}.loan-preview-summary>div b,.loan-preview-summary>div strong{font-size:clamp(11px,3.4vw,15px)!important}}
+
+/* Accessible touch sizes for filter controls and form selectors. */
+.passbook-filter-grid button,.analytics-filters button,.tabs-scroller .tab-btn,
+button.filter-pill,button.status-filter-pill,.filter-pills button,
+select.input,.passbook-filter-grid select{min-height:44px}
+.passbook-filter-grid button,.analytics-filters button,.filter-pills button{padding-inline:13px}
+
+/* Clear, icon-led empty states across Passbook, Profit Analysis and Loan History. */
+.empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;min-height:112px;padding:22px 16px!important;border:1px dashed #b9d9c8!important;border-radius:18px!important;background:linear-gradient(145deg,#f4fbf6,#fff)!important;color:#60756a!important;line-height:1.5}
+.empty-state:before{content:"✓";display:grid;place-items:center;width:38px;height:38px;border-radius:13px;background:#e3f5e9;color:#0f9d58;font-size:20px;font-weight:900;box-shadow:inset 0 0 0 1px #c8ead4}
+.empty-state.loan-empty-compact{min-height:86px;padding:14px!important;gap:5px}
+.empty-state.loan-empty-compact:before{content:"↗";width:32px;height:32px;font-size:17px}
+.empty-state small{max-width:440px;color:#74867c;font-size:11px}
+
+/* Keep penalty/overdue figures conspicuous and readable in all loan cards. */
+.loan-borrower-card .loan-dues-alert{background:#fffbeb!important;border:1px solid #f59e0b!important;border-radius:12px!important;padding:10px!important}
+.loan-borrower-card .loan-dues-alert span{color:#92400e!important}
+.loan-borrower-card .loan-dues-alert b{color:#78350f!important}
