@@ -158,6 +158,7 @@ function Login(){
 }
 function GroupSelector(){const {user,tenant,setTenant}=useStore();const nav=useNavigate();const [groups,setGroups]=useState<Tenant[]>([]);const [busy,setBusy]=useState(false);useEffect(()=>{if((user?.role as string)==='super_admin')api.tenants().then(setGroups)},[user?.role]);if((user?.role as string)!=='super_admin')return null;return <div className="card mb-5"><div className="flex flex-wrap items-center justify-between gap-3"><div><div className="font-black">{tr("Active group context")}</div><div className="text-sm text-slate-500">{tr("One tenant record = one BC group. All group data carries this tenant_id.")}</div></div><div className="flex gap-2"><select className="input min-w-[220px]" value={tenant?._id||''} onChange={e=>{const g=groups.find(x=>x._id===e.target.value);setTenant(g||null)}}><option value="">{tr("Select group")}</option>{groups.map(g=><option key={g._id} value={g._id}>{g.name} ({g.code})</option>)}</select><button className="btn-primary" disabled={!tenant||busy} onClick={()=>{setBusy(true);nav('/dashboard')}}>{tr("Open")}</button></div></div></div>}
 function MemberDashboard(){
+  const navigate=useNavigate();
   const {user,tenant,setTenant}=useStore();
   const tid=user?.tenant_id||tenant?._id||'';
   const [shares,setShares]=useState<Share[]>([]),[vaultView,setVaultView]=useState<'group'|'personal'>('group');
