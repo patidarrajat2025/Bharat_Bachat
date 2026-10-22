@@ -3439,3 +3439,33 @@ button,.btn-primary,.btn-secondary,.input,textarea,select{font-size:15px}
 .loan-borrower-card .loan-progress-human,.loan-borrower-card .loan-borrower-meta{color:#64748b!important}
 .loan-borrower-card .loan-progress-track{background:#e2e8f0!important}
 .loan-borrower-card .loan-progress-track>span{background:#10b981!important}
+
+/* Loan screens: restore the calm light-card language used across the dashboard. */
+.loan-preview-summary>div{background:linear-gradient(145deg,#ffffff,#f5fbf7)!important;border:1px solid #dcebe2!important;box-shadow:0 5px 18px rgba(26,43,76,.055)!important}
+.loan-preview-summary>div span{color:#64766c!important}
+.loan-preview-summary>div strong,.loan-preview-summary>div b{color:#1a2b4c!important}
+.loan-preview-summary>div:nth-child(2){background:linear-gradient(145deg,#f0f7ff,#ffffff)!important;border-color:#d9e7f7!important}
+.loan-preview-summary>div:nth-child(3){background:linear-gradient(145deg,#fff8e9,#ffffff)!important;border-color:#f2e3bd!important}
+.loan-borrower-card{background:linear-gradient(145deg,#ffffff,#fbfdfc)!important;border:1px solid #e1e9e4!important;color:#1a2b4c!important;box-shadow:0 7px 22px rgba(26,43,76,.055)!important}
+.loan-borrower-name,.loan-borrower-name strong,.loan-borrower-head{color:#1a2b4c!important}
+.loan-borrower-name strong{display:block!important;color:#1a2b4c!important;font-size:15px!important;font-weight:900!important;opacity:1!important;visibility:visible!important}
+.loan-borrower-head{border-bottom:1px solid #e5eee8!important}
+.loan-borrower-head .loan-avatar{background:#e1f5e9!important;color:#087443!important}
+.loan-borrower-card .loan-finance-grid>div{background:#f6faf7!important;border-color:#e2eee6!important}
+.loan-borrower-card .loan-finance-grid>div:nth-child(3n+2){background:#f2f7ff!important;border-color:#dfe9f7!important}
+.loan-borrower-card .loan-finance-grid>div:nth-child(3n){background:#fff9ed!important;border-color:#f1e5c9!important}
+.loan-borrower-card .loan-finance-grid span{color:#64748b!important}
+.loan-borrower-card .loan-finance-grid b{color:#1a2b4c!important}
+.loan-borrower-card .loan-progress-human,.loan-borrower-card .loan-borrower-meta{color:#64748b!important}
+.loan-borrower-card .loan-progress-track{background:#e4ece7!important}
+.loan-borrower-card .loan-progress-track>span{background:linear-gradient(90deg,#0f9d58,#5acb8b)!important}
+.loan-borrower-card .loan-penalty-tile{background:#fff7e8!important;border-color:#f3dfb4!important}
+.loan-borrower-card .loan-penalty-tile span,.loan-borrower-card .loan-penalty-tile b{color:#9a6200!important}
+.loan-allocation-banner{padding:12px;border:1px solid #cfe9d8;border-radius:14px;background:linear-gradient(145deg,#f0fbf4,#ffffff);font-size:13px;color:#1a2b4c}
+.loan-allocation-banner> b{display:block;margin-bottom:8px;color:#087443;font-weight:900}
+.loan-allocation-banner>div{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;padding:6px 0;border-bottom:1px solid #e3f0e7}
+.loan-allocation-banner>div span{color:#52665b;font-size:12px}
+.loan-allocation-banner>div b{font-variant-numeric:tabular-nums;text-align:right;overflow-wrap:anywhere}
+.loan-allocation-banner .loan-allocation-total{margin-top:5px;padding-top:10px;border-bottom:0;border-top:1px solid #b9ddc6;font-size:14px;font-weight:900}
+.loan-allocation-banner .loan-allocation-total span,.loan-allocation-banner .loan-allocation-total b{color:#087443;font-size:14px}
+.loan-allocation-banner p{margin-top:7px;color:#64748b;font-size:11px}
