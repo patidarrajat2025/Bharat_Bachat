@@ -3469,3 +3469,59 @@ button,.btn-primary,.btn-secondary,.input,textarea,select{font-size:15px}
 .loan-allocation-banner .loan-allocation-total{margin-top:5px;padding-top:10px;border-bottom:0;border-top:1px solid #b9ddc6;font-size:14px;font-weight:900}
 .loan-allocation-banner .loan-allocation-total span,.loan-allocation-banner .loan-allocation-total b{color:#087443;font-size:14px}
 .loan-allocation-banner p{margin-top:7px;color:#64748b;font-size:11px}
+
+/* Compact, high-density loan drill-down and repayment form */
+.loan-borrower-card{padding:12px!important;border-radius:18px!important}
+.loan-borrower-head{min-height:42px!important;padding-bottom:9px!important;gap:9px!important}
+.loan-borrower-card .loan-slim-progress{margin:8px 0 9px!important;display:flex;flex-direction:column;gap:5px}
+.loan-borrower-card .loan-slim-progress>div:first-child{display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:11px;line-height:1.25;color:#475569;font-weight:700}
+.loan-borrower-card .loan-days-remaining{font-weight:500;color:#64748b;white-space:nowrap}
+.loan-borrower-card .loan-progress-track{height:6px!important;border-radius:999px!important;overflow:hidden}
+.loan-borrower-card .loan-principal-summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));margin:8px 0 9px;border:1px solid #e3e9e5;border-radius:12px;background:#fff;overflow:hidden}
+.loan-borrower-card .loan-principal-summary>div{min-width:0;padding:9px 7px;display:flex;flex-direction:column;gap:4px}
+.loan-borrower-card .loan-principal-summary>div+div{border-left:1px solid #e2e8e4}
+.loan-borrower-card .loan-principal-summary span{font-size:11px;line-height:1.2;color:#64748b;white-space:normal}
+.loan-borrower-card .loan-principal-summary b{font-size:13px;line-height:1.25;font-weight:850;color:#1a2b4c;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
+.loan-borrower-card .loan-finance-grid{gap:7px!important;margin-top:7px!important}
+.loan-borrower-card .loan-finance-grid>div{padding:8px!important;border-radius:10px!important;min-width:0}
+.loan-borrower-card .loan-finance-grid span{font-size:10px!important;line-height:1.25!important}
+.loan-borrower-card .loan-finance-grid b{font-size:13px!important;line-height:1.25!important;font-variant-numeric:tabular-nums}
+.loan-borrower-card .loan-finance-grid small{font-size:10px!important;line-height:1.2!important}
+.loan-borrower-card .loan-dues-alert{grid-column:1/-1;display:grid!important;grid-template-columns:minmax(0,1fr) 1px minmax(0,1fr);align-items:center;gap:10px;padding:9px 10px!important;background:#fffbeb!important;border:1px solid #f59e0b!important;border-left:3px solid #f59e0b!important;border-radius:11px!important}
+.loan-borrower-card .loan-dues-alert>div{display:flex;flex-direction:column;gap:3px;min-width:0;background:transparent!important;border:0!important;padding:0!important}
+.loan-borrower-card .loan-dues-alert span{font-size:10px!important;color:#92400e!important}
+.loan-borrower-card .loan-dues-alert b{font-size:13px!important;color:#78350f!important;white-space:nowrap;overflow-wrap:normal!important}
+.loan-borrower-card .loan-dues-alert i{height:28px;background:#f4d28a}
+.loan-borrower-card .loan-slim-progress+.btn-primary{margin-top:10px!important;min-height:42px!important}
+.loan-currency-field{display:block;min-width:0}
+.loan-currency-field>span{display:block;margin-bottom:6px;font-size:13px;font-weight:750;color:#334155}
+.loan-currency-input-wrap{display:flex;align-items:center;gap:9px;min-height:48px;padding:0 12px;border:1px solid #cbd5e1;border-radius:12px;background:#fff;transition:border-color .15s,box-shadow .15s}
+.loan-currency-input-wrap:focus-within{border-color:#0f9d58;box-shadow:0 0 0 3px rgba(15,157,88,.12)}
+.loan-currency-input-wrap:has(.loan-currency-input:invalid:not(:placeholder-shown)){border-color:#dc2626}
+.loan-currency-input-wrap> b{flex:none;font-size:18px;font-weight:900;color:#0f8050}
+.loan-currency-input{width:100%;min-width:0;border:0!important;outline:0!important;box-shadow:none!important;background:transparent!important;color:#1a2b4c;font-size:17px;font-weight:850;font-variant-numeric:tabular-nums;padding:8px 0!important}
+.loan-currency-input::placeholder{color:#94a3b8;font-weight:600}
+.loan-currency-suffix{flex:none;font-size:10px;font-weight:800;letter-spacing:.05em;color:#94a3b8}
+.loan-allocation-banner>div{align-items:center!important;gap:10px!important}
+.loan-allocation-banner>div span{flex:1;min-width:0;line-height:1.25}
+.loan-allocation-banner>div b{flex:0 0 auto;white-space:nowrap;overflow-wrap:normal!important;word-break:keep-all;font-size:12px;font-variant-numeric:tabular-nums}
+.loan-allocation-banner .loan-allocation-total b{font-size:14px}
+.loan-info-note{padding:8px 10px;border:1px solid #e5e7eb;border-radius:11px;background:#f8fafc;color:#475569;font-size:11px}
+.loan-info-note summary{cursor:pointer;font-weight:750;list-style:none}
+.loan-info-note summary::-webkit-details-marker{display:none}
+.loan-info-note p{margin:6px 0 0;line-height:1.4}
+@media(max-width:480px){
+ .loan-borrower-card .loan-principal-summary>div{padding:8px 5px}
+ .loan-borrower-card .loan-principal-summary span{font-size:10px}
+ .loan-borrower-card .loan-principal-summary b{font-size:12px}
+ .loan-borrower-card .loan-dues-alert{gap:7px;padding:8px!important}
+ .loan-borrower-card .loan-dues-alert b{font-size:12px!important}
+}
+.loan-repayment-form{gap:10px!important}
+.loan-repayment-summary{padding:10px!important}
+.loan-repayment-summary>div:first-child{font-size:12px!important;line-height:1.25!important}
+.loan-repayment-summary .grid{grid-template-columns:repeat(3,minmax(0,1fr))!important;gap:7px 10px!important;margin-top:8px!important}
+.loan-repayment-summary .grid>div{min-width:0;padding:6px 7px;border:1px solid #e4e9e6;border-radius:9px;background:#fff}
+.loan-repayment-summary .grid>div span{display:block;font-size:10px;line-height:1.2;color:#64748b}
+.loan-repayment-summary .grid>div>div{margin-top:3px;font-size:12px;line-height:1.2;white-space:nowrap;font-variant-numeric:tabular-nums;overflow:visible}
+@media(max-width:480px){.loan-repayment-summary .grid{grid-template-columns:repeat(2,minmax(0,1fr))!important}.loan-repayment-summary .grid>div>div{font-size:12px}}
