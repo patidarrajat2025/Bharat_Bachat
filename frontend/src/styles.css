@@ -3409,3 +3409,24 @@ button,.btn-primary,.btn-secondary,.input,textarea,select{font-size:15px}
 .member-shortcut-grid button span{font-size:.86rem;line-height:1.25}
 .member-shortcut-grid button small{font-size:.68rem;line-height:1.25;color:#64748b;font-weight:600}
 @media(min-width:640px){.member-shortcut-grid{grid-template-columns:repeat(4,minmax(0,1fr))}}
+/* Loan portfolio preview parity: dark navy canvas, compact three-metric header and consistent expandable cards. */
+.loan-preview-summary{grid-template-columns:repeat(3,minmax(0,1fr))!important;gap:10px!important;margin:12px 0 16px!important}
+.loan-preview-summary>div{min-width:0;padding:14px 15px!important;border:1px solid #35434d!important;border-radius:17px!important;background:#17212a!important;display:flex!important;flex-direction:column-reverse!important;align-items:flex-start!important;justify-content:center!important;gap:5px!important}
+.loan-preview-summary>div span{font-size:10px!important;font-weight:800!important;text-transform:none!important;letter-spacing:0!important;color:#b8c5d0!important}
+.loan-preview-summary>div strong,.loan-preview-summary>div b{font-size:clamp(15px,2.2vw,23px)!important;line-height:1.2!important;color:#fff!important;overflow-wrap:anywhere}
+.loan-preview-summary .loan-outstanding-warning{background:#17212a!important;border-color:#35434d!important}
+.loan-borrower-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+.loan-borrower-card{background:linear-gradient(155deg,#101820 0%,#0b1116 100%)!important;border:1px solid #35434d!important;border-radius:20px!important;color:#f8fafc!important;box-shadow:0 10px 28px rgba(3,8,12,.16)!important;padding:17px!important}
+.loan-borrower-name strong{color:#f8fafc!important;font-size:15px!important}
+.loan-borrower-head{padding-bottom:13px;border-bottom:1px solid #35434d}
+.loan-borrower-head .loan-avatar{background:#203d35!important;color:#5ce0a0!important;border-radius:14px!important}
+.loan-borrower-card .loan-finance-grid>div{background:#18232c!important;border:1px solid #2d3a44!important;border-radius:12px!important;padding:11px!important}
+.loan-borrower-card .loan-finance-grid span{font-size:10px!important;color:#aab7c4!important}
+.loan-borrower-card .loan-finance-grid b{font-size:15px!important;color:#fff!important;overflow-wrap:anywhere}
+.loan-borrower-card .loan-progress-human,.loan-borrower-card .loan-borrower-meta{color:#b8c5d0!important}
+.loan-borrower-card .loan-progress-track{background:#34424b!important}
+.loan-borrower-card .loan-progress-track>span{background:#39c987!important}
+.loan-penalty-tile{background:#302719!important;border:1px solid #66502a!important;border-radius:12px!important;padding:11px!important}
+.loan-penalty-tile span{color:#ffcb73!important}
+.loan-penalty-tile b{color:#ffcb73!important}
+@media(max-width:760px){.loan-preview-summary{grid-template-columns:repeat(3,minmax(0,1fr))!important;gap:7px!important}.loan-preview-summary>div{padding:11px 9px!important;border-radius:13px!important}.loan-preview-summary>div span{font-size:9px!important}.loan-preview-summary>div strong,.loan-preview-summary>div b{font-size:clamp(12px,3.4vw,17px)!important}.loan-borrower-grid{grid-template-columns:1fr!important}.loan-borrower-card{padding:14px!important}.loan-borrower-card .loan-finance-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important}}
