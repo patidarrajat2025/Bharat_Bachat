@@ -3537,3 +3537,68 @@ button,.btn-primary,.btn-secondary,.input,textarea,select{font-size:15px}
 .loan-allocation-banner>div b{flex-shrink:0;white-space:nowrap;overflow-wrap:normal;word-break:keep-all}
 .loan-allocation-banner .loan-allocation-total{font-weight:900;border-top:1px solid #b8e2c8;padding-top:8px;margin-top:6px}
 @media(max-width:480px){.loan-borrower-card .loan-days-remaining{max-width:52%;font-size:9px}.loan-quick-chip{font-size:12px;padding:8px 5px}.loan-allocation-banner>div{gap:6px!important}.loan-allocation-banner>div span{font-size:11px;white-space:normal;flex:1 1 auto}.loan-allocation-banner>div b{font-size:11px;flex:0 0 auto}}
+
+
+/* Follow-up fix: balanced 2x2 metric grid prevents orphaned Interest Collected. */
+.loan-borrower-card .loan-finance-grid{
+  display:grid!important;
+  grid-template-columns:repeat(2,minmax(0,1fr))!important;
+  align-items:stretch;
+  gap:8px!important;
+  margin-top:8px!important;
+}
+.loan-borrower-card .loan-finance-grid>div{
+  min-width:0;
+  display:flex;
+  flex-direction:column;
+  justify-content:center;
+  gap:4px;
+}
+.loan-borrower-card .loan-finance-grid .loan-dues-alert{
+  grid-column:1/-1!important;
+  display:grid!important;
+  grid-template-columns:minmax(0,1fr) 1px minmax(0,1fr)!important;
+}
+.loan-borrower-card .loan-finance-grid>div:not(.loan-dues-alert) span{
+  min-height:25px;
+}
+.loan-borrower-card .loan-finance-grid>div:not(.loan-dues-alert) b{
+  overflow-wrap:anywhere;
+  font-variant-numeric:tabular-nums;
+}
+@media(max-width:360px){
+  .loan-borrower-card .loan-finance-grid{gap:6px!important}
+  .loan-borrower-card .loan-finance-grid>div{padding:7px!important}
+  .loan-borrower-card .loan-finance-grid>div:not(.loan-dues-alert) span{min-height:0}
+}
+
+/* Dashboard density pass: keep core metrics visible and tuck secondary balances away. */
+.app-shell[data-route="/dashboard"] .dashboard-kist-shortcut{
+  display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;
+  min-height:54px;margin:10px 0 12px;padding:10px 14px;border:1px solid #cfe8d8;
+  border-radius:14px;background:linear-gradient(105deg,#f0faf3,#ffffff);color:#173b2b;text-align:left;
+}
+.app-shell[data-route="/dashboard"] .dashboard-kist-shortcut>span:first-child{display:flex;flex-direction:column;gap:3px;min-width:0}
+.app-shell[data-route="/dashboard"] .dashboard-kist-shortcut b{font-size:13px;font-weight:800;color:#14532d}
+.app-shell[data-route="/dashboard"] .dashboard-kist-shortcut small{font-size:11px;color:#64756a}
+.app-shell[data-route="/dashboard"] .dashboard-group-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important;gap:10px!important}
+.app-shell[data-route="/dashboard"] .dashboard-group-grid .vault-account-card{min-width:0}
+.app-shell[data-route="/dashboard"] .dashboard-deposit-pair{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.app-shell[data-route="/dashboard"] .dashboard-deposit-mini{display:flex;flex-direction:column;align-items:flex-start;gap:5px;min-width:0;padding:11px 12px;border:1px solid #dce8df;border-radius:12px;background:#fff;text-align:left;color:#183c2b}
+.app-shell[data-route="/dashboard"] .dashboard-deposit-mini span{font-size:11px;font-weight:700;color:#557061}
+.app-shell[data-route="/dashboard"] .dashboard-deposit-mini strong{max-width:100%;font-size:17px;font-weight:850;line-height:1.2;color:#14532d;overflow-wrap:anywhere;font-variant-numeric:tabular-nums}
+.app-shell[data-route="/dashboard"] .dashboard-deposit-mini small{font-size:10px;color:#75877c}
+.app-shell[data-route="/dashboard"] .dashboard-asset-outflow{padding:10px 12px!important;gap:8px!important}
+.app-shell[data-route="/dashboard"] .dashboard-asset-outflow .vault-outflow-actions{gap:6px!important}
+.app-shell[data-route="/dashboard"] .dashboard-asset-outflow .vault-outflow-actions button{min-height:38px;padding:7px 9px!important;border:1px solid #dce8df!important;border-radius:10px!important;background:#fff!important;box-shadow:none!important;font-size:11px!important;line-height:1.25}
+.app-shell[data-route="/dashboard"] .loan-empty-compact{display:flex;flex-direction:row;align-items:center;gap:10px;min-height:0!important;margin-top:8px;padding:11px 12px!important;border:1px dashed #cfe2d4;border-radius:12px;background:#f7fbf8;text-align:left}
+.app-shell[data-route="/dashboard"] .loan-empty-compact .loan-empty-icon{display:flex;align-items:center;justify-content:center;flex:0 0 32px;width:32px;height:32px;border-radius:10px;background:#e3f4e8;color:#16804a;font-size:19px;font-weight:800}
+.app-shell[data-route="/dashboard"] .loan-empty-compact>span:not(.loan-empty-icon){font-size:12px;font-weight:750;color:#234a34}
+.app-shell[data-route="/dashboard"] .loan-empty-compact small{display:block;flex:1 1 auto;min-width:0;font-size:10px;line-height:1.35;color:#738478}
+@media(max-width:420px){
+ .app-shell[data-route="/dashboard"] .dashboard-group-grid{gap:8px!important}
+ .app-shell[data-route="/dashboard"] .dashboard-asset-outflow .vault-outflow-actions button{font-size:10px!important;padding:7px!important}
+ .app-shell[data-route="/dashboard"] .dashboard-deposit-mini strong{font-size:15px}
+ .app-shell[data-route="/dashboard"] .loan-empty-compact{flex-wrap:wrap}
+ .app-shell[data-route="/dashboard"] .loan-empty-compact small{flex-basis:100%;margin-left:42px}
+}
