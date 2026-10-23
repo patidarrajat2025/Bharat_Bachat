@@ -2919,7 +2919,17 @@ async def loan_payment(tenant_id:str,body:LoanPayment,user=Depends(admin_user)):
             if scheduled_monthly_minor<=0 or paid_cycle>=scheduled_monthly_minor: continue
             rate_minor=to_minor(per_day_penalty)
             if paid_cycle*2>=scheduled_monthly_minor: rate_minor=(rate_minor+1)//2
-            accrued_penalty_minor += max(0,(dt.date()-cycle_due).days)*max(0,rate_minor)
+            # Count each missed cycle's overdue days only until the next cycle's due
+            # date (or the repayment date). This prevents overlapping cycles from
+            # counting the same calendar day multiple times.
+            next_year,next_month=cycle_year,cycle_month+1
+            if next_month>12:
+                next_year+=1
+                next_month=1
+            next_due=date(next_year,next_month,min(max(1,due_day),calendar.monthrange(next_year,next_month)[1]))
+            cycle_end=min(dt.date(),next_due)
+            overdue_days_for_cycle=max(0,(cycle_end-cycle_due).days)
+            accrued_penalty_minor += overdue_days_for_cycle*max(0,rate_minor)
         penalty_due_minor=max(0,accrued_penalty_minor-penalty_already_minor)
         payment_minor=to_minor(body.amount) if body.amount is not None else to_minor(body.principal)+to_minor(body.interest)
         if payment_minor<=0: raise HTTPException(400,"Payment must be greater than zero")
