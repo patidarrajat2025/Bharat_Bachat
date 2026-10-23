@@ -3681,3 +3681,23 @@ select.input,.passbook-filter-grid select{min-height:44px}
 .profile-menu-head b{color:#172b25!important;font-weight:900!important;font-size:14px!important;line-height:1.35!important}
 .profile-menu-head span{color:#52665e!important}
 @media(max-width:380px){.dashboard-deposit-pair-outside{gap:7px}.dashboard-deposit-pair-outside .dashboard-deposit-mini{padding:10px!important}.dashboard-deposit-pair-outside .dashboard-deposit-mini strong{font-size:15px!important}}
+
+/* Modern banking-style member loan tracker: clear balances and separate progress metrics. */
+.my-loan-widget{padding:clamp(16px,3.5vw,24px);border:1px solid #dce8e3;border-radius:26px;background:linear-gradient(160deg,#fff 0%,#fbfdfc 100%);box-shadow:0 12px 32px rgba(26,43,76,.055)}
+.my-loan-widget .section-head{align-items:center;gap:12px;margin-bottom:4px}
+.my-loan-widget .section-head h3{font-size:clamp(19px,4.5vw,25px);letter-spacing:-.035em;color:#1a2b4c}
+.my-loan-widget .section-head p{font-size:clamp(12px,3vw,15px);line-height:1.45;color:#77858b;margin-top:5px}
+.my-loan-widget .text-link{padding:9px 12px;border-radius:12px;background:#e8f6ee;color:#087443;font-size:13px;white-space:nowrap}
+.loan-tracker-summary{gap:12px;margin-top:20px}
+.loan-tracker-summary>div{padding:clamp(14px,3vw,20px);gap:6px;border-radius:20px;background:#f6faf7;border:1px solid #e0ebe5;min-width:0}
+.loan-tracker-summary span{font-size:clamp(11px,2.7vw,13px);color:#667970}
+.loan-tracker-summary b{font-size:clamp(20px,5vw,28px);letter-spacing:-.035em;line-height:1.2;overflow-wrap:anywhere}
+.loan-tracker-summary small{font-size:clamp(11px,2.7vw,13px);line-height:1.4}
+.my-loan-widget .loan-progress-label{margin-top:17px;font-size:12px;gap:12px}
+.my-loan-widget .loan-progress-label b{color:#1a2b4c;font-variant-numeric:tabular-nums}
+.my-loan-widget .loan-progress-track{height:10px;margin-top:8px;background:#e7eeeb}
+.my-loan-widget .loan-progress-track-secondary{height:8px;background:#e9edf4}
+.my-loan-widget .loan-progress-track-secondary span{background:linear-gradient(90deg,#1a2b4c,#526b9a)!important}
+.loan-tracker-foot{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:18px;font-size:clamp(10px,2.6vw,12px);line-height:1.5;color:#667780}
+.loan-tracker-foot span{padding:10px;border:1px solid #e8eeeb;border-radius:13px;background:#fff;overflow-wrap:anywhere}
+@media(max-width:480px){.loan-tracker-summary{grid-template-columns:1fr 1fr}.loan-tracker-foot{grid-template-columns:1fr 1fr}.loan-tracker-foot span:last-child{grid-column:1/-1}.my-loan-widget{border-radius:22px}.loan-tracker-summary>div{padding:13px}.my-loan-widget .section-head h3{font-size:20px}}
