@@ -12,7 +12,7 @@ from ..db import get_db, backfill_financial_feed
 from ..deps import current_user, tenant_guard, require_roles, parse_oid
 from ..models import *
 from ..services import tenant_summary, analytics
-from ..accounting_engine import monthly_overdue_penalty_minor, to_minor, from_minor, simple_interest_minor, contractual_interest_accrued_minor, loan_settlement_is_complete, allocate_kist_payment, profit_components, net_profit_from_buckets_minor, assert_idempotent_match, allocate_minor, financial_feed_source_key, bc_penalty_chargeable_days
+from ..accounting_engine import monthly_overdue_penalty_minor, to_minor, from_minor, simple_interest_minor, contractual_interest_accrued_minor, loan_settlement_is_complete, allocate_kist_payment, profit_components, net_profit_from_buckets_minor, assert_idempotent_match, allocate_minor, financial_feed_source_key, bc_penalty_chargeable_days, loan_eligible_emi_months, loan_emi_month_key, allocate_emi_cycle_coverage
 from ..journal import build_journal, build_expense_journal, reverse_journal
 from ..audit import audit
 from ..core.config import settings
@@ -2846,7 +2846,7 @@ async def loan_payment(tenant_id:str,body:LoanPayment,user=Depends(admin_user)):
         # Use the rate agreed on this loan; group settings are only a legacy fallback.
         rate=loan.get("interest_rate",tenant.get("loan_interest_rate_per_month",2))
         due_day=int(loan.get("loan_due_date",tenant.get("loan_due_date",10)) or 10)
-        month_key=dt.strftime("%Y-%m"); interest_key=f"loan-interest:{body.loan_id}:{month_key}"; penalty_key=f"loan-penalty:{body.loan_id}:{month_key}"
+        payment_month_key=dt.strftime("%Y-%m")
         # Accrue contractual simple interest cumulatively through the payment month,
         # capped at the full-tenure contract amount. Do not treat each payment as
         # a fresh month's interest, and never accrue beyond the saved loan tenure.
@@ -2857,12 +2857,14 @@ async def loan_payment(tenant_id:str,body:LoanPayment,user=Depends(admin_user)):
             try: start_date=date.fromisoformat(start_value[:10])
             except Exception: start_date=dt.date()
         else: start_date=dt.date()
-        try:
-            elapsed_months=max(1,(dt.year-start_date.year)*12+(dt.month-start_date.month)+1)
-        except Exception:
-            elapsed_months=1
+        # EMI month advances only after the configured due day. A payment dated
+        # 1..10 belongs to the previous cycle; from the 11th it belongs to this month.
+        elapsed_months=min(max(0,int(loan.get("months",1) or 1)),
+                           loan_eligible_emi_months(start_date,dt.date(),due_day))
+        emi_month_key=loan_emi_month_key(start_date,dt.date(),due_day)
+        interest_key=f"loan-interest:{body.loan_id}:{emi_month_key}"
+        penalty_key=f"loan-penalty:{body.loan_id}:{emi_month_key}"
         tenure=max(1,int(loan.get("months",1) or 1))
-        elapsed_months=min(tenure,elapsed_months)
         expected_contractual_minor=(int(loan["expected_interest_minor"]) if loan.get("expected_interest_minor") is not None
                                     else to_minor(loan.get("expected_interest",simple_interest_minor(principal_minor,rate,tenure)) or 0))
         # Spread the stored tenure total across scheduled months using integer paise;
@@ -2891,16 +2893,30 @@ async def loan_payment(tenant_id:str,body:LoanPayment,user=Depends(admin_user)):
         import calendar
         repayment_rows=await db.transactions.find(
             {"tenant_id":tenant_id,"loan_id":body.loan_id,"type":"loan_repayment"},
-            {"payment_month":1,"date":1,"principal_repaid":1,"principal_repaid_minor":1,
+            {"payment_month":1,"emi_month":1,"emi_months_covered":1,"date":1,"principal_repaid":1,"principal_repaid_minor":1,
              "loan_interest_collected":1,"loan_interest_minor":1,"loan_penalty_collected":1,"loan_penalty_minor":1}
         ).to_list(10000)
         paid_by_month={}
         penalty_already_minor=0
         for row in repayment_rows:
-            month=str(row.get("payment_month") or (row.get("date").strftime("%Y-%m") if hasattr(row.get("date"),"strftime") else str(row.get("date") or "")[:7]))
             principal_part=int(row["principal_repaid_minor"]) if row.get("principal_repaid_minor") is not None else to_minor(row.get("principal_repaid",0) or 0)
             interest_part=int(row["loan_interest_minor"]) if row.get("loan_interest_minor") is not None else to_minor(row.get("loan_interest_collected",0) or 0)
-            paid_by_month[month]=paid_by_month.get(month,0)+principal_part+interest_part
+            covered = row.get("emi_months_covered") or []
+            if covered:
+                for item in covered:
+                    cycle_key = str(item.get("due_month") or "")[:7]
+                    if cycle_key:
+                        paid_by_month[cycle_key]=paid_by_month.get(cycle_key,0)+int(item.get("amount_minor") or 0)
+            elif row.get("emi_month"):
+                # Compatibility for transactions created before multi-cycle coverage.
+                emi_y, emi_m = map(int, str(row["emi_month"])[:7].split("-"))
+                due_y, due_m = (emi_y + 1, 1) if emi_m == 12 else (emi_y, emi_m + 1)
+                month = f"{due_y:04d}-{due_m:02d}"
+                paid_by_month[month]=paid_by_month.get(month,0)+principal_part+interest_part
+            else:
+                # Legacy transactions stored payment_month as the due-cycle key.
+                month=str(row.get("payment_month") or (row.get("date").strftime("%Y-%m") if hasattr(row.get("date"),"strftime") else str(row.get("date") or "")[:7]))
+                paid_by_month[month]=paid_by_month.get(month,0)+principal_part+interest_part
             penalty_already_minor += int(row["loan_penalty_minor"]) if row.get("loan_penalty_minor") is not None else to_minor(row.get("loan_penalty_collected",0) or 0)
         monthly_principal_minor=(principal_minor+tenure-1)//tenure
         monthly_interest_minor=(expected_contractual_minor+tenure-1)//tenure
@@ -2942,7 +2958,13 @@ async def loan_payment(tenant_id:str,body:LoanPayment,user=Depends(admin_user)):
         payment=float(from_minor(payment_minor)); penalty_paid=float(from_minor(penalty_paid_minor))
         interest_paid=float(from_minor(interest_paid_minor)); principal_paid=float(from_minor(principal_paid_minor))
         new_interest=float(from_minor(new_interest_minor))
-        txid=await insert_tx(tenant_id,loan["member_id"],"loan_repayment",payment,body.account,user,loan_id=body.loan_id,principal=principal_paid,interest=interest_paid,loan_interest_collected=interest_paid,loan_penalty_collected=penalty_paid,principal_repaid=principal_paid,loan_penalty_key=penalty_key if penalty_paid else None,loan_interest_key=interest_key if interest_paid else None,overdue_days=overdue,per_day_penalty=per_day_penalty,interest_accrued_delta=new_interest,payment_month=month_key,payment_category="loan_emi",date=dt,note=body.note,idempotency_key=body.idempotency_key)
+        # Allocate the principal+interest portion to oldest scheduled EMI cycles.
+        # This lets one payment clear multiple overdue installments without marking
+        # the cash-receipt month as paid by mistake.
+        covered_minor=principal_paid_minor+interest_paid_minor
+        emi_months_covered=allocate_emi_cycle_coverage(
+            start_date, elapsed_months, scheduled_monthly_minor, paid_by_month, covered_minor)
+        txid=await insert_tx(tenant_id,loan["member_id"],"loan_repayment",payment,body.account,user,loan_id=body.loan_id,principal=principal_paid,interest=interest_paid,loan_interest_collected=interest_paid,loan_penalty_collected=penalty_paid,principal_repaid=principal_paid,loan_penalty_key=penalty_key if penalty_paid else None,loan_interest_key=interest_key if interest_paid else None,overdue_days=overdue,per_day_penalty=per_day_penalty,interest_accrued_delta=new_interest,payment_month=payment_month_key,emi_month=emi_month_key,emi_months_covered=emi_months_covered,payment_category="loan_emi",date=dt,note=body.note,idempotency_key=body.idempotency_key)
         tx_doc=await db.transactions.find_one({"_id":parse_oid(txid),"tenant_id":tenant_id})
         updated=await _apply_loan_repayment_once(tenant_id,tx_doc)
         remaining_principal_minor=max(0,(int(updated["principal_minor"]) if updated.get("principal_minor") is not None else to_minor(updated.get("principal",0) or 0))-(int(updated["principal_paid_minor"]) if updated.get("principal_paid_minor") is not None else to_minor(updated.get("principal_paid",0) or 0)))

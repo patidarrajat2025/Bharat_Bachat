@@ -66,6 +66,50 @@ def allocate_minor(total_minor: int, numerator: int, denominator: int) -> int:
     return int(value.quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
 
+def loan_eligible_emi_months(start_date: date, payment_date: date, due_day: int = 10) -> int:
+    """Number of contractual EMI months eligible on a selected payment date.
+
+    Days 1..due_day settle the preceding EMI cycle; the next cycle becomes
+    eligible on due_day + 1. The origination month is EMI month one and dates
+    before that first cycle never create a negative/early installment.
+    """
+    due = min(max(1, int(due_day or 10)), 31)
+    month_delta = (payment_date.year - start_date.year) * 12 + payment_date.month - start_date.month
+    elapsed = month_delta + (0 if payment_date.day <= due else 1)
+    return max(0, elapsed)
+
+
+def loan_emi_month_key(start_date: date, payment_date: date, due_day: int = 10) -> str:
+    """Return the scheduled EMI cycle associated with a payment date."""
+    offset = loan_eligible_emi_months(start_date, payment_date, due_day)
+    # The first eligible cycle is the loan's origination month.
+    month_index = start_date.year * 12 + start_date.month - 1 + max(0, offset - 1)
+    return f"{month_index // 12:04d}-{month_index % 12 + 1:02d}"
+
+
+def allocate_emi_cycle_coverage(start_date: date, elapsed_months: int, scheduled_minor: int,
+                                paid_by_due_month: dict[str, int], covered_minor: int) -> list[dict]:
+    """Allocate a repayment's principal+interest amount to oldest EMI due cycles."""
+    remaining = max(0, int(covered_minor))
+    scheduled = max(0, int(scheduled_minor))
+    coverage: list[dict] = []
+    for offset in range(max(0, int(elapsed_months))):
+        emi_index = start_date.year * 12 + start_date.month - 1 + offset
+        emi_year, emi_month = emi_index // 12, emi_index % 12 + 1
+        due_index = emi_index + 1
+        due_year, due_month = due_index // 12, due_index % 12 + 1
+        due_key = f"{due_year:04d}-{due_month:02d}"
+        cycle_remaining = max(0, scheduled - int(paid_by_due_month.get(due_key, 0) or 0))
+        assigned = min(remaining, cycle_remaining)
+        if assigned:
+            coverage.append({"emi_month": f"{emi_year:04d}-{emi_month:02d}",
+                             "due_month": due_key, "amount_minor": assigned})
+            remaining -= assigned
+        if remaining <= 0:
+            break
+    return coverage
+
+
 def contractual_interest_accrued_minor(total_interest_minor: int, elapsed_months: int, tenure_months: int) -> int:
     """Return cumulative scheduled simple interest through a month, capped at contract total."""
     total = max(0, int(total_interest_minor))

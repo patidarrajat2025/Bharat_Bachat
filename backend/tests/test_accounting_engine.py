@@ -1,6 +1,6 @@
 import unittest
 from datetime import date
-from app.accounting_engine import to_minor, from_minor, simple_interest_minor, allocate_kist_payment, profit_components, profit_minor, monthly_overdue_penalty_minor, assert_idempotent_match, allocate_minor, net_profit_from_buckets_minor, financial_feed_source_key, bc_penalty_chargeable_days
+from app.accounting_engine import to_minor, from_minor, simple_interest_minor, allocate_kist_payment, profit_components, profit_minor, monthly_overdue_penalty_minor, assert_idempotent_match, allocate_minor, net_profit_from_buckets_minor, financial_feed_source_key, bc_penalty_chargeable_days, allocate_emi_cycle_coverage
 
 class AccountingEngineTests(unittest.TestCase):
     def test_kist_partial_payment_and_bulk_cap_are_exact(self):
@@ -176,3 +176,38 @@ def test_early_full_settlement_waives_future_month_interest():
     assert not loan_settlement_is_complete(1, current_month_interest, current_month_interest)
     # Full-tenure settlement still closes when all contractual interest has been paid.
     assert loan_settlement_is_complete(0, expected_full_tenure_interest, expected_full_tenure_interest)
+
+class LoanEmiCutoffTests(unittest.TestCase):
+    def test_emi_cutoff_keeps_previous_month_through_due_day(self):
+        from app.accounting_engine import loan_eligible_emi_months, loan_emi_month_key
+        start = date(2026, 10, 1)
+        self.assertEqual(loan_eligible_emi_months(start, date(2026, 11, 1), 10), 1)
+        self.assertEqual(loan_eligible_emi_months(start, date(2026, 11, 10), 10), 1)
+        self.assertEqual(loan_eligible_emi_months(start, date(2026, 11, 11), 10), 2)
+        self.assertEqual(loan_emi_month_key(start, date(2026, 11, 10), 10), "2026-10")
+        self.assertEqual(loan_emi_month_key(start, date(2026, 11, 11), 10), "2026-11")
+
+    def test_emi_cutoff_handles_year_boundary_and_origination_month(self):
+        from app.accounting_engine import loan_eligible_emi_months, loan_emi_month_key
+        start = date(2026, 12, 20)
+        self.assertEqual(loan_eligible_emi_months(start, date(2026, 12, 10), 10), 0)
+        self.assertEqual(loan_eligible_emi_months(start, date(2026, 12, 11), 10), 1)
+        self.assertEqual(loan_eligible_emi_months(start, date(2027, 1, 10), 10), 1)
+        self.assertEqual(loan_emi_month_key(start, date(2027, 1, 10), 10), "2026-12")
+        self.assertEqual(loan_emi_month_key(start, date(2027, 1, 11), 10), "2027-01")
+
+
+class LoanEmiCoverageTests(unittest.TestCase):
+    def test_payment_covering_two_months_is_allocated_to_oldest_due_cycles(self):
+        coverage = allocate_emi_cycle_coverage(date(2026, 10, 1), 2, 150000, {}, 300000)
+        self.assertEqual(coverage, [
+            {"emi_month": "2026-10", "due_month": "2026-11", "amount_minor": 150000},
+            {"emi_month": "2026-11", "due_month": "2026-12", "amount_minor": 150000},
+        ])
+
+    def test_partial_previous_cycle_is_filled_before_new_cycle(self):
+        coverage = allocate_emi_cycle_coverage(date(2026, 10, 1), 2, 150000, {"2026-11": 75000}, 225000)
+        self.assertEqual(coverage, [
+            {"emi_month": "2026-10", "due_month": "2026-11", "amount_minor": 75000},
+            {"emi_month": "2026-11", "due_month": "2026-12", "amount_minor": 150000},
+        ])
