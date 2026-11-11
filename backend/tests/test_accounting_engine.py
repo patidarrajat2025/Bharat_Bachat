@@ -31,12 +31,14 @@ class AccountingEngineTests(unittest.TestCase):
             {'type':'contribution','amount':'500'},
             {'type':'loan_disbursement','amount':'-1000'},
         ]
-        self.assertEqual(profit_minor(rows, [{'amount':'10'}]), 12500)  # operating expenses do not reduce cumulative profit
+        self.assertEqual(profit_minor(rows, [{'amount':'10'}]), 11500)  # expenses reduce earned profit only
 
-    def test_expenses_do_not_reduce_cumulative_profit(self):
-        income = profit_minor([{'type':'interest','account':'cash','amount':'25','amount_minor':2500}], [{'amount':'20','amount_minor':2000}])
-        self.assertEqual(income, 2500)
-        self.assertEqual(net_profit_from_buckets_minor(bank_interest=25, expenses=20), 2500)
+    def test_expenses_reduce_profit_without_touching_contributed_principal(self):
+        net = profit_minor([{'type':'interest','account':'cash','amount':'25','amount_minor':2500}], [{'amount':'20','amount_minor':2000}])
+        self.assertEqual(net, 500)
+        self.assertEqual(net_profit_from_buckets_minor(bank_interest=25, expenses=20), 500)
+        # BC contributions are excluded from the profit pool and remain untouched.
+        self.assertEqual(profit_minor([{'type':'contribution','amount':'1000'}], [{'amount':'20'}]), -2000)
 
     def test_reversal_offsets_original_interest_profit(self):
         original = {'type':'interest','account':'bank','amount':'25','amount_minor':2500}
@@ -211,3 +213,20 @@ class LoanEmiCoverageTests(unittest.TestCase):
             {"emi_month": "2026-10", "due_month": "2026-11", "amount_minor": 75000},
             {"emi_month": "2026-11", "due_month": "2026-12", "amount_minor": 150000},
         ])
+
+class LoanEmiCutoffTests(unittest.TestCase):
+    def test_first_emi_is_not_due_in_origination_month(self):
+        from app.accounting_engine import loan_eligible_emi_months, loan_emi_month_key
+        start = date(2026, 10, 11)
+        self.assertEqual(loan_eligible_emi_months(start, date(2026, 10, 11), 10), 0)
+        self.assertEqual(loan_eligible_emi_months(start, date(2026, 11, 10), 10), 1)
+        self.assertEqual(loan_eligible_emi_months(start, date(2026, 11, 11), 10), 2)
+        self.assertEqual(loan_emi_month_key(start, date(2026, 11, 10), 10), '2026-10')
+        self.assertEqual(loan_emi_month_key(start, date(2026, 11, 11), 10), '2026-11')
+
+    def test_due_date_boundary_for_loan_issued_on_october_11(self):
+        from app.accounting_engine import loan_eligible_emi_months
+        start = date(2026, 10, 11)
+        self.assertEqual(loan_eligible_emi_months(start, date(2026, 11, 1), 10), 1)
+        self.assertEqual(loan_eligible_emi_months(start, date(2026, 11, 10), 10), 1)
+        self.assertEqual(loan_eligible_emi_months(start, date(2026, 11, 11), 10), 2)

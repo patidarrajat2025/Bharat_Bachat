@@ -102,8 +102,8 @@ async def profit_report(tenant_id: str, start: datetime | None = None, end: date
             bucket["expenses_minor"] += amount
 
     for bucket in monthly.values():
-        bucket["profit_minor"] = bucket["income_minor"]
-    return {"income_minor":income_minor,"expense_minor":expense_minor,"net_profit_minor":income_minor,
+        bucket["profit_minor"] = bucket["income_minor"] - bucket["expenses_minor"]
+    return {"income_minor":income_minor,"expense_minor":expense_minor,"net_profit_minor":income_minor-expense_minor,
             "components_minor":components,"income_entries_count":income_count,"entries":entries,"monthly":monthly}
 
 
@@ -237,16 +237,14 @@ async def tenant_summary(tenant_id: str, member_id: str | None = None):
     # Define expenses before using it so an empty expense aggregate is safe.
     exp_total = int(canonical_profit.get("expense_minor", 0) or 0) / 100
     # Principal repayments and loan disbursements are balance-sheet movements,
-    # not profit. Per group policy, earned profit is cumulative and expenses reduce
-    # cash/bank balances only; expenses are reported separately, not deducted from profit.
+    # not profit. Group expenses are charged only against earned profit; they do
+    # not alter BC contributions or loan principal balances.
     profit_income_minor = int(canonical_profit["net_profit_minor"])
     profit_income = profit_income_minor / 100
-    # Total BC Fund is a cumulative earned-and-collected group metric. Expenses
-    # affect the cash/bank vault only; they must never reduce this cumulative fund.
-    # Keep regular kist, all interest, and all penalties sourced from canonical
-    # transaction classifications to avoid parallel formulas drifting apart.
+    # Total BC Fund protects contributed principal and adds only net earned
+    # profit. Expenses therefore reduce the profit portion, never BC Kist/principal.
     total_interest_income = interest + loan_interest_income + other_interest_income
-    bc_fund = float(tx.get("regular_contributions", 0) or 0) + total_interest_income + penalties
+    bc_fund = float(tx.get("regular_contributions", 0) or 0) + profit_income
 
     cash = opening_cash + float(tx.get("cash_inflow", 0) or 0) - float(tx.get("cash_outflow_tx", 0) or 0) - float(exp.get("cash", 0) or 0)
     bank = opening_bank + float(tx.get("bank_inflow", 0) or 0) - float(tx.get("bank_outflow_tx", 0) or 0) - float(exp.get("bank", 0) or 0)

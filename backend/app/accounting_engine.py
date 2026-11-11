@@ -75,7 +75,11 @@ def loan_eligible_emi_months(start_date: date, payment_date: date, due_day: int 
     """
     due = min(max(1, int(due_day or 10)), 31)
     month_delta = (payment_date.year - start_date.year) * 12 + payment_date.month - start_date.month
-    elapsed = month_delta + (0 if payment_date.day <= due else 1)
+    # The origination month never creates an EMI, even when disbursed on/after
+    # the 11th. First installment is due on the 10th of the following month.
+    if month_delta <= 0:
+        return 0
+    elapsed = month_delta + (1 if payment_date.day > due else 0)
     return max(0, elapsed)
 
 
@@ -238,22 +242,21 @@ def profit_components(transaction: dict) -> dict[str, int]:
     return vals
 
 def profit_minor(transactions, expenses) -> int:
-    """Cumulative earned profit in paise. Expenses affect group liquidity, not member profit."""
-    return sum(profit_components(row)["income_total"] for row in transactions)
+    """Net earned profit in paise; operating expenses cannot consume contributed principal."""
+    income = sum(profit_components(row)["income_total"] for row in transactions)
+    expense_minor = sum(abs(_minor_field(row, "amount_minor", ("amount",))) for row in (expenses or []))
+    return income - expense_minor
 
 
 def net_profit_from_buckets_minor(*, bank_interest=0, loan_interest=0, other_interest=0,
                                  loan_penalties=0, bc_penalties=0, other_penalties=0,
                                  other_income=0, expenses=0) -> int:
-    """Cumulative earned profit from MongoDB buckets (rupees); expenses are separate cash outflows."""
-    # Keep the argument for API compatibility, but never deduct expenses or
-    # include miscellaneous non-interest income in strict group/member profit.
+    """Net earned profit in paise; expenses consume profit, never member principal."""
     income_minor = sum(to_minor(v) for v in (
         bank_interest, loan_interest, other_interest, loan_penalties,
         bc_penalties, other_penalties,
     ))
-    # Expenses reduce cash/bank balances and are reported separately; they do not reduce cumulative member profit.
-    return income_minor
+    return income_minor - max(0, to_minor(expenses))
 
 def monthly_overdue_penalty_minor(start_date: date, payment_date: date, due_day: int, rate_minor_per_day: int = 100) -> int:
     """Cumulative fixed ₹/day charge for each missed monthly cycle after loan start month.
