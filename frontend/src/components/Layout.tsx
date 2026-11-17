@@ -16,12 +16,13 @@ const nav=[
   ['/analytics','analytics',BarChart3],
   ['/passbook','passbook',WalletCards],
   ['/loans','loans',CreditCard],
+  ['/investments','investments',BarChart3],
   ['/personal-loan','personalLoan',Receipt],
   ['/admin','admin',ShieldCheck],
 ] as const;
 
 
-const mobileLabel=(key:string)=>({dashboard:'Dashboard',members:'Members',register:'Financial Register',ledger:'Member Ledger',analytics:'Analytics',passbook:'Passbook',loans:'Loans',personalLoan:'My Loan',admin:'Admin',more:'More'} as Record<string,string>)[key]||key;
+const mobileLabel=(key:string)=>({dashboard:'Dashboard',members:'Members',register:'Financial Register',ledger:'Member Ledger',analytics:'Analytics',passbook:'Passbook',loans:'Loans',personalLoan:'My Loan',investments:'Investments',admin:'Admin',more:'More'} as Record<string,string>)[key]||key;
 
 
 import { Logo } from './Logo';
@@ -42,7 +43,7 @@ export function Layout({children}:{children:ReactNode}){
   const refreshNotifications=async(openTray=false)=>{if(!user?.tenant_id)return;try{const rows=await api.notifications(user.tenant_id);const unreadRows=rows.filter((n:any)=>!n.read);setUnread(unreadRows.length);setNotifications(rows);if(openTray&&unreadRows.length){await Promise.all(unreadRows.map((n:any)=>api.markNotificationRead(user.tenant_id!,n._id).catch(()=>null)));setNotifications(rows.map((n:any)=>({...n,read:true})));setUnread(0)}}catch{}};
   const closeNotifications=async()=>{setNotifOpen(false);if(!user?.tenant_id||!notifications.length)return;const ids=notifications.map((n:any)=>n._id).filter(Boolean);try{await api.clearNotifications(user.tenant_id,ids);setNotifications([]);setUnread(0)}catch{}};
   const allowed=user?.role==='member'
-    ? ['/dashboard','/analytics','/passbook','/personal-loan','/loans']
+    ? ['/dashboard','/analytics','/passbook','/personal-loan','/loans','/investments']
     : user?.role==='super_admin'
       ? ['/admin']
       : nav.map(x=>x[0]);
