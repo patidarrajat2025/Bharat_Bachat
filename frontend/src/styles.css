@@ -3665,7 +3665,7 @@ select.input,.passbook-filter-grid select{min-height:44px}
 .empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;min-height:112px;padding:22px 16px!important;border:1px dashed #b9d9c8!important;border-radius:18px!important;background:linear-gradient(145deg,#f4fbf6,#fff)!important;color:#60756a!important;line-height:1.5}
 .empty-state:before{content:"✓";display:grid;place-items:center;width:38px;height:38px;border-radius:13px;background:#e3f5e9;color:#0f9d58;font-size:20px;font-weight:900;box-shadow:inset 0 0 0 1px #c8ead4}
 .empty-state.loan-empty-compact{min-height:86px;padding:14px!important;gap:5px}
-.empty-state.loan-empty-compact:before{content:"↗";width:32px;height:32px;font-size:17px}
+.empty-state.loan-empty-compact:before{display:none!important;content:none!important}
 .empty-state small{max-width:440px;color:#74867c;font-size:11px}
 
 /* Keep penalty/overdue figures conspicuous and readable in all loan cards. */
@@ -3701,3 +3701,28 @@ select.input,.passbook-filter-grid select{min-height:44px}
 .loan-tracker-foot{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-top:18px;font-size:clamp(10px,2.6vw,12px);line-height:1.5;color:#667780}
 .loan-tracker-foot span{padding:10px;border:1px solid #e8eeeb;border-radius:13px;background:#fff;overflow-wrap:anywhere}
 @media(max-width:480px){.loan-tracker-summary{grid-template-columns:1fr 1fr}.loan-tracker-foot{grid-template-columns:1fr 1fr}.loan-tracker-foot span:last-child{grid-column:1/-1}.my-loan-widget{border-radius:22px}.loan-tracker-summary>div{padding:13px}.my-loan-widget .section-head h3{font-size:20px}}
+
+/* Investment portfolio module and the fixed five-item mobile navigation. */
+.investment-tabs{display:flex;gap:7px;overflow-x:auto;padding:4px 0 12px;margin-bottom:12px;scrollbar-width:thin}
+.investment-tabs button{white-space:nowrap;border:1px solid var(--figma-line);background:#fff;color:var(--figma-navy);border-radius:12px;padding:10px 14px;font-weight:800;font-size:12px}
+.investment-tabs button.active{background:#e8f6ee;color:#087443;border-color:#b8dfc8}
+.investment-metrics{grid-template-columns:repeat(3,minmax(0,1fr))!important;margin-bottom:14px}
+.investment-count-row{display:flex;gap:10px;margin:12px 0;color:var(--figma-navy);font-size:12px}.investment-count-row b{padding:8px 12px;border:1px solid var(--figma-line);border-radius:12px;background:#fff}
+.investment-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}.investment-card{min-width:0;padding:16px}
+.investment-card-head{display:flex;justify-content:space-between;gap:8px;margin-bottom:14px}.investment-card-head>div{display:grid;gap:4px;min-width:0}.investment-card-head b{font-size:15px;color:var(--figma-navy)}.investment-card-head span{font-size:11px;color:var(--figma-muted)}
+.investment-card-head em{font-style:normal;font-size:10px;font-weight:900;text-transform:capitalize;border-radius:99px;padding:5px 9px;background:#e8f6ee;color:#087443;height:max-content}.investment-card-head em.closed{background:#f1f3f5;color:#667085}
+.investment-detail-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;margin:12px 0}.investment-detail-grid span{display:grid;gap:4px;font-size:10px;color:var(--figma-muted);min-width:0}.investment-detail-grid b{font-size:13px;color:var(--figma-navy);font-variant-numeric:tabular-nums;overflow-wrap:anywhere}
+.investment-card-actions,.investment-actions{display:flex;flex-wrap:wrap;gap:7px;margin-top:12px}.investment-card-actions button,.investment-actions button{min-height:38px;font-size:11px;padding:8px 11px}
+.investment-form{padding:18px}.investment-form h3,.investment-history h3{display:flex;align-items:center;gap:8px;margin:0 0 14px;color:var(--figma-navy)}.investment-form-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}.investment-form-grid .field,.investment-form-grid .form-field{min-width:0}
+.investment-form .investment-hint,.investment-detail .investment-hint{font-size:11px;line-height:1.5;color:var(--figma-muted);padding:10px 12px;background:#f5f8f6;border-radius:10px;margin:12px 0}.investment-check{display:flex;align-items:center;gap:8px;font-size:12px;margin:12px 0}
+.investment-detail-overlay{position:fixed;inset:0;z-index:120;background:rgba(15,23,42,.42);display:grid;place-items:center;padding:18px}.investment-detail{position:relative;width:min(620px,100%);max-height:90dvh;overflow:auto;padding:20px}.investment-detail h3{margin:0;color:var(--figma-navy)}.investment-detail>p{font-size:12px;color:var(--figma-muted)}.investment-close{position:absolute;right:12px;top:10px;border:0;background:#eef3f0;border-radius:50%;width:32px;height:32px;font-size:22px;color:var(--figma-navy)}
+.investment-history{padding:16px}.investment-history-row{display:flex;justify-content:space-between;gap:12px;padding:12px 0;border-bottom:1px solid var(--figma-line)}.investment-history-row>div{display:grid;gap:4px}.investment-history-row b{font-size:12px;text-transform:capitalize}.investment-history-row span,.investment-history-row small{font-size:10px;color:var(--figma-muted)}.investment-history-row>strong{font-size:12px;white-space:nowrap;font-variant-numeric:tabular-nums}
+@media(max-width:760px){.investment-list{grid-template-columns:1fr}.investment-metrics{grid-template-columns:repeat(2,minmax(0,1fr))!important}.investment-form-grid{grid-template-columns:1fr}}
+@media(max-width:640px){.mobile-nav{grid-template-columns:repeat(5,minmax(0,1fr))!important}.mobile-nav-item{min-width:0!important}.mobile-nav-item[href="/dashboard"]>span{white-space:nowrap!important;overflow:visible!important;overflow-wrap:normal!important;word-break:keep-all!important}.mobile-nav-item>span:not(.mobile-nav-active){line-height:1.08!important;overflow-wrap:normal!important;word-break:normal!important}}
+
+.investment-custom-category{display:flex;align-items:end;gap:6px;min-width:0}.investment-custom-category .form-field{flex:1;min-width:0}.investment-custom-category button{min-height:42px;white-space:nowrap;font-size:10px;padding:7px 9px}
+@media(max-width:760px){.investment-custom-category{align-items:stretch;flex-direction:column}}
+
+.investment-documents{display:grid;gap:6px;font-size:11px;color:var(--figma-muted)}
+
+.investment-documents button{border:0;background:transparent;color:#087443;text-align:left;padding:4px 0;font-size:11px;font-weight:800}

@@ -33,3 +33,7 @@ python -m uvicorn app.main:app --host 0.0.0.0 --port 8080
 ```
 
 See `ARCHITECTURE.md` and `LOCAL_AND_RENDER_SETUP.md` for environment configuration.
+
+## Local development
+
+See [`LOCAL_AND_RENDER_SETUP.md`](LOCAL_AND_RENDER_SETUP.md) for backend, frontend and Render configuration. Copy `backend/.env.example` to `backend/.env` and configure `MONGODB_URI`, `MONGODB_DB` and `JWT_SECRET`. MongoDB must run as a replica set or sharded cluster because financial operations use multi-document transactions.
