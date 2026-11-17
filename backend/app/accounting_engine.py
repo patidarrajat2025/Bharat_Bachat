@@ -178,7 +178,7 @@ def profit_components(transaction: dict) -> dict[str, int]:
         for field in ("loan_interest_collected", "interest", "other_interest", "other_interest_value",
                       "loan_penalty_collected", "bc_regular_kist_penalty", "other_penalty", "other_penalty_value",
                       "loan_interest_minor", "interest_minor", "other_interest_minor", "loan_penalty_minor",
-                      "bc_penalty_minor", "other_penalty_minor", "investment_realized_profit_minor", "investment_realized_loss_minor"):
+                      "bc_penalty_minor", "other_penalty_minor"):
             if transaction.get(field) is not None:
                 transaction[field] = abs(int(transaction[field] or 0)) if field.endswith("_minor") else abs(float(transaction[field] or 0))
         typ = str(transaction.get("type", ""))
@@ -226,19 +226,16 @@ def profit_components(transaction: dict) -> dict[str, int]:
     signed_amount = _minor_field(transaction, "amount_minor", ("amount",))
     other_income = max(0, signed_amount) if typ in explicit_income_types and typ not in excluded else 0
     # Explicit category values win over legacy fallbacks to avoid double counting.
-    investment_profit = _minor_field(transaction, "investment_realized_profit_minor", ("investment_realized_profit",))
-    investment_loss = _minor_field(transaction, "investment_realized_loss_minor", ("investment_realized_loss",))
     vals = {"bank_interest": bank_interest, "loan_interest": max(0, loan_interest),
             "other_interest": max(0, other_interest), "loan_penalties": max(0, loan_penalty),
             "bc_penalties": max(0, bc_penalty), "other_penalties": max(0, other_penalty),
-            "other_income": other_income, "investment_profit": max(0, investment_profit),
-            "investment_loss": -max(0, investment_loss)}
+            "other_income": other_income}
     # Strict Bharat Bachat policy: earned profit is ONLY interest + penalties.
     # Other income remains separately classified for reconciliation but is not
     # part of group/member profit until the policy explicitly changes.
     vals["income_total"] = sum(vals[key] for key in (
         "bank_interest", "loan_interest", "other_interest",
-        "loan_penalties", "bc_penalties", "other_penalties", "investment_profit", "investment_loss",
+        "loan_penalties", "bc_penalties", "other_penalties",
     ))
     if is_reversal:
         vals = {key: -value for key, value in vals.items()}
@@ -253,11 +250,11 @@ def profit_minor(transactions, expenses) -> int:
 
 def net_profit_from_buckets_minor(*, bank_interest=0, loan_interest=0, other_interest=0,
                                  loan_penalties=0, bc_penalties=0, other_penalties=0,
-                                 other_income=0, investment_profit=0, investment_loss=0, expenses=0) -> int:
+                                 other_income=0, expenses=0) -> int:
     """Net earned profit in paise; expenses consume profit, never member principal."""
     income_minor = sum(to_minor(v) for v in (
         bank_interest, loan_interest, other_interest, loan_penalties,
-        bc_penalties, other_penalties, investment_profit, investment_loss,
+        bc_penalties, other_penalties,
     ))
     return income_minor - max(0, to_minor(expenses))
 

@@ -8,8 +8,6 @@ class Settings(BaseSettings):
     # Render production values come from Render Environment Variables.
     mongodb_uri: str = ""
     mongodb_db: str = "bharat_bachat"
-    # Investment document storage: "local" filesystem or Cloudinary (default).
-    database_mode: str = "atlas"
 
     jwt_secret: str = ""
     jwt_expire_minutes: int = 1440

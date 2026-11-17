@@ -66,8 +66,8 @@ async def profit_report(tenant_id: str, start: datetime | None = None, end: date
                   "other_interest":1,"other_interest_value":1,"other_interest_minor":1,
                   "loan_penalty_collected":1,"loan_penalty_minor":1,"bc_regular_kist_penalty":1,
                   "bc_penalty_minor":1,"other_penalty":1,"other_penalty_value":1,"other_penalty_minor":1,
-                  "payment_category":1,"penalty_category":1,"investment_realized_profit_minor":1,"investment_realized_loss_minor":1}
-    component_keys = ("bank_interest", "loan_interest", "other_interest", "loan_penalties", "bc_penalties", "other_penalties", "other_income", "investment_profit", "investment_loss")
+                  "payment_category":1,"penalty_category":1}
+    component_keys = ("bank_interest", "loan_interest", "other_interest", "loan_penalties", "bc_penalties", "other_penalties", "other_income")
     components = {key: 0 for key in component_keys}
     income_minor = 0
     expense_minor = 0
@@ -170,8 +170,8 @@ async def tenant_summary(tenant_id: str, member_id: str | None = None):
                 "bank_outflow_tx": {"$sum": {"$cond": [{"$and": ["$is_real", {"$eq": [{"$ifNull": ["$account", "cash"]}, "bank"]}, {"$lt": ["$amount", 0]}]}, {"$abs": "$amount"}, 0]}},
                 "other_income": {"$sum": {"$cond": [
                     {"$and": ["$is_real", {"$or": [
-                        {"$and": [{"$ne": ["$type", "reversal"]}, {"$not": [{"$in": ["$type", ["contribution", "loan_repayment", "loan_disbursement", "interest", "penalty", "transfer", "cash_bank_transfer", "investment_return", "investment_disbursement"]]}]}, {"$gt": ["$amount", 0]}]},
-                        {"$and": [{"$eq": ["$type", "reversal"]}, {"$not": [{"$in": ["$original_type", ["contribution", "loan_repayment", "loan_disbursement", "interest", "penalty", "transfer", "cash_bank_transfer", "investment_return", "investment_disbursement", "expense_allocation", "expense"]]}]}, {"$lt": ["$amount", 0]}]}
+                        {"$and": [{"$ne": ["$type", "reversal"]}, {"$not": [{"$in": ["$type", ["contribution", "loan_repayment", "loan_disbursement", "interest", "penalty", "transfer", "cash_bank_transfer"]]}]}, {"$gt": ["$amount", 0]}]},
+                        {"$and": [{"$eq": ["$type", "reversal"]}, {"$not": [{"$in": ["$original_type", ["contribution", "loan_repayment", "loan_disbursement", "interest", "penalty", "transfer", "cash_bank_transfer", "expense_allocation", "expense"]]}]}, {"$lt": ["$amount", 0]}]}
                     ]}]},
                     "$amount", 0,
                 ]}},

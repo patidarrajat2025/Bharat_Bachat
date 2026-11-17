@@ -55,17 +55,7 @@ def build_journal(transaction: dict) -> dict | None:
         return None
     account = "bank" if transaction.get("account") == "bank" else "cash"
     debit = credit = None
-    if typ == "investment_disbursement":
-        debit, credit = [("investment_asset", amount)], [(account, amount)]
-    elif typ == "investment_return":
-        capital = abs(_minor(transaction, "investment_capital_minor", "investment_capital"))
-        profit = abs(_minor(transaction, "investment_realized_profit_minor", "investment_realized_profit"))
-        loss = abs(_minor(transaction, "investment_realized_loss_minor", "investment_realized_loss"))
-        if capital + profit - loss != amount:
-            raise ValueError("Investment return components do not reconcile to cash proceeds")
-        debit = [(account, amount), ("investment_realized_loss", loss)]
-        credit = [("investment_asset", capital), ("investment_realized_profit", profit)]
-    elif typ == "loan_disbursement":
+    if typ == "loan_disbursement":
         principal = abs(_minor(transaction, "principal_minor", "principal")) or amount
         debit = [("loan_receivable", principal)]
         credit = [(account, principal)]
