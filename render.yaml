@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: bharat-bachat-api
+    name: dev-app-backend
     runtime: python
     rootDir: backend
     buildCommand: pip install -r requirements.txt
@@ -29,7 +29,7 @@ services:
         value: "5"
 
   - type: web
-    name: bharat-bachat-web
+    name: dev-app-UI
     runtime: static
     rootDir: frontend
     buildCommand: npm ci && npm run build
